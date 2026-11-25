@@ -142,10 +142,14 @@ struct BreakView: View {
                     .buttonStyle(PillButtonStyle(prominent: true))
                     .disabled(vm.busyPausing)
                 }
-                Button("推迟 \(vm.postponeLabel)") { vm.onPostpone?() }
+                Button("延后 \(vm.postponeLabel)") { vm.onPostpone?() }
                     .buttonStyle(PillButtonStyle())
+                    .opacity(vm.canPostpone ? 1 : 0)
+                    .disabled(!vm.canPostpone)
                 Button("跳过") { vm.onSkip?() }
                     .buttonStyle(PillButtonStyle())
+                    .opacity(vm.canSkip ? 1 : 0)
+                    .disabled(!vm.canSkip)
             }
             .padding(.top, 4)
         }
@@ -180,7 +184,7 @@ struct BreakView: View {
                 Text("休息结束")
                     .font(.system(size: 32, weight: .semibold))
                     .foregroundStyle(.white)
-                Text("准备好了就开始下一轮 \(vm.workLabel) 的工作")
+                Text("准备好了就继续，下一轮 \(vm.workLabel)")
                     .font(.system(size: 15))
                     .foregroundStyle(.white.opacity(0.68))
             }

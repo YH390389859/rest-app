@@ -24,8 +24,12 @@ final class BreakViewModel: ObservableObject {
     @Published var busyPausing = false
     @Published var mediaNotice: String?
 
-    @Published var workLabel: String = "20 分钟"
+    @Published var workLabel: String = "约 10 分钟"
     @Published var postponeLabel: String = "5 分钟"
+
+    /// 严格模式 / 延后开关决定休息界面上哪些按钮可用
+    @Published var canSkip = true
+    @Published var canPostpone = true
 
     var onSkip: (() -> Void)?
     var onPostpone: (() -> Void)?
@@ -41,6 +45,8 @@ final class BreakViewModel: ObservableObject {
     var hasMediaAction: Bool { mediaAppName != nil && !mediaPaused }
 
     var footerHint: String {
-        mode == .running ? "按 Esc 跳过本次休息" : "点击按钮或按任意键继续"
+        if mode != .running { return "点击按钮或按任意键继续" }
+        if !canSkip { return "严格模式：这次休息不能跳过" }
+        return "按 Esc 跳过本次休息"
     }
 }

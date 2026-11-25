@@ -43,10 +43,16 @@ final class AppSettings: ObservableObject {
     static let shared = AppSettings()
 
     enum Keys {
-        static let work = "workMinutes"
+        static let microEnabled = "microBreakEnabled"
         static let micro = "microBreakSeconds"
+        static let microEvery = "microBreakEveryMinutes"
+        static let microAllowPostpone = "microAllowPostpone"
+        static let microStrict = "microStrictMode"
+        static let longEnabled = "longBreakEnabled"
         static let long = "longBreakMinutes"
-        static let every = "breaksBeforeLong"
+        static let longSlots = "microsBeforeLong"
+        static let longAllowPostpone = "longAllowPostpone"
+        static let longStrict = "longStrictMode"
         static let endBehavior = "breakEndBehavior"
         static let autoPause = "autoPauseMedia"
         static let resume = "resumeMediaAfterBreak"
@@ -61,10 +67,24 @@ final class AppSettings: ObservableObject {
     private let store = UserDefaults.standard
     private var didBootstrap = false
 
-    @Published var workMinutes: Double = 20 { didSet { store.set(workMinutes, forKey: Keys.work) } }
+    // MARK: 小憩（频率高、时间短）
+
+    @Published var microEnabled: Bool = true { didSet { store.set(microEnabled, forKey: Keys.microEnabled) } }
     @Published var microBreakSeconds: Double = 20 { didSet { store.set(microBreakSeconds, forKey: Keys.micro) } }
+    @Published var microBreakEveryMinutes: Double = 10 { didSet { store.set(microBreakEveryMinutes, forKey: Keys.microEvery) } }
+    @Published var microAllowPostpone: Bool = true { didSet { store.set(microAllowPostpone, forKey: Keys.microAllowPostpone) } }
+    @Published var microStrictMode: Bool = false { didSet { store.set(microStrictMode, forKey: Keys.microStrict) } }
+
+    // MARK: 休息（频率低、时间长）
+
+    @Published var longEnabled: Bool = true { didSet { store.set(longEnabled, forKey: Keys.longEnabled) } }
     @Published var longBreakMinutes: Double = 5 { didSet { store.set(longBreakMinutes, forKey: Keys.long) } }
-    @Published var breaksBeforeLong: Double = 4 { didSet { store.set(breaksBeforeLong, forKey: Keys.every) } }
+    /// 和 Stretchly 的 `longBreakInterval` 同义：这次休息之前要经过几次小憩。
+    /// 休息的「每 N 分钟」= 小憩间隔 × (microsBeforeLong + 1)
+    @Published var microsBeforeLong: Double = 2 { didSet { store.set(microsBeforeLong, forKey: Keys.longSlots) } }
+    @Published var longAllowPostpone: Bool = true { didSet { store.set(longAllowPostpone, forKey: Keys.longAllowPostpone) } }
+    @Published var longStrictMode: Bool = false { didSet { store.set(longStrictMode, forKey: Keys.longStrict) } }
+
     @Published var breakEndBehavior: BreakEndBehavior = .waitForInput {
         didSet { store.set(breakEndBehavior.rawValue, forKey: Keys.endBehavior) }
     }
@@ -80,10 +100,16 @@ final class AppSettings: ObservableObject {
 
     private init() {
         let d = UserDefaults.standard
-        if let v = d.object(forKey: Keys.work) as? Double { workMinutes = v }
+        if let v = d.object(forKey: Keys.microEnabled) as? Bool { microEnabled = v }
         if let v = d.object(forKey: Keys.micro) as? Double { microBreakSeconds = v }
+        if let v = d.object(forKey: Keys.microEvery) as? Double { microBreakEveryMinutes = v }
+        if let v = d.object(forKey: Keys.microAllowPostpone) as? Bool { microAllowPostpone = v }
+        if let v = d.object(forKey: Keys.microStrict) as? Bool { microStrictMode = v }
+        if let v = d.object(forKey: Keys.longEnabled) as? Bool { longEnabled = v }
         if let v = d.object(forKey: Keys.long) as? Double { longBreakMinutes = v }
-        if let v = d.object(forKey: Keys.every) as? Double { breaksBeforeLong = v }
+        if let v = d.object(forKey: Keys.longAllowPostpone) as? Bool { longAllowPostpone = v }
+        if let v = d.object(forKey: Keys.longSlots) as? Double { microsBeforeLong = v }
+        if let v = d.object(forKey: Keys.longStrict) as? Bool { longStrictMode = v }
         if let raw = d.string(forKey: Keys.endBehavior), let v = BreakEndBehavior(rawValue: raw) { breakEndBehavior = v }
         if let v = d.object(forKey: Keys.autoPause) as? Bool { autoPauseMedia = v }
         if let v = d.object(forKey: Keys.resume) as? Bool { resumeMediaAfterBreak = v }
@@ -99,11 +125,43 @@ final class AppSettings: ObservableObject {
 
     // MARK: 计算属性
 
-    var workSeconds: TimeInterval { max(60, workMinutes * 60) }
     var microBreakDuration: TimeInterval { max(5, microBreakSeconds) }
+    /// 小憩间隔，也就是每一段工作的长度（Stretchly 的 miniBreakInterval）
+    var microBreakInterval: TimeInterval { max(60, microBreakEveryMinutes * 60) }
     var longBreakDuration: TimeInterval { max(30, longBreakMinutes * 60) }
-    var longEvery: Int { max(2, Int(breaksBeforeLong)) }
     var postponeSeconds: TimeInterval { max(60, postponeMinutes * 60) }
+
+    /// 一个休息周期有几个「槽位」：microsBeforeLong 次小憩 + 1 次休息
+    var slotsPerLong: Int { max(2, Int(microsBeforeLong.rounded()) + 1) }
+
+    /// 休息周期总时长 = 小憩间隔 × 槽位数（默认 10 分 × 3 = 30 分）
+    var longCycleSeconds: TimeInterval { microBreakInterval * Double(slotsPerLong) }
+    var longCycleMinutes: Double { (longCycleSeconds / 60).rounded() }
+
+    /// 只开休息、关掉小憩时，一段工作就直接排到一个完整周期
+    var workSpanSeconds: TimeInterval { microEnabled ? microBreakInterval : longCycleSeconds }
+
+    /// 两类休息的开启 / 严格模式 / 允许推迟
+    func isEnabled(_ kind: BreakKind) -> Bool {
+        kind == .long ? longEnabled : microEnabled
+    }
+
+    func isStrict(_ kind: BreakKind) -> Bool {
+        kind == .long ? longStrictMode : microStrictMode
+    }
+
+    func allowsPostpone(_ kind: BreakKind) -> Bool {
+        guard isEnabled(kind), !isStrict(kind) else { return false }
+        return kind == .long ? longAllowPostpone : microAllowPostpone
+    }
+
+    func allowsSkip(_ kind: BreakKind) -> Bool { !isStrict(kind) }
+
+    /// 下一轮工作大概多长（用于「开始下一轮」按钮文案）
+    var nextWorkLabel: String {
+        let minutes = Int((workSpanSeconds / 60).rounded())
+        return "约 \(max(1, minutes)) 分钟"
+    }
 
     /// 空闲超过这个时长，认为人不在电脑前，休息没意义
     var idleThreshold: TimeInterval { 120 }

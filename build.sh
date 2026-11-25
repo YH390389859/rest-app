@@ -14,6 +14,15 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Rest"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+
+# 图标：缺了就现场生成（生成脚本只依赖系统框架）
+if [ ! -f Resources/AppIcon.icns ]; then
+  echo "==> 生成 AppIcon.icns"
+  swiftc -O tools/make-icon.swift -o /tmp/rest-make-icon
+  /tmp/rest-make-icon Resources/AppIcon.icns
+fi
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 # 本地自签名，确保 TCC（辅助功能/自动化）能稳定记住授权

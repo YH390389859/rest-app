@@ -53,6 +53,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            CommandLine.arguments.count > index + 1 {
             DebugRender.run(path: CommandLine.arguments[index + 1])
         }
+
+        // 调试用：--render-settings <输出路径> 渲染设置界面
+        if let index = CommandLine.arguments.firstIndex(of: "--render-settings"),
+           CommandLine.arguments.count > index + 1 {
+            DebugRender.renderSettings(path: CommandLine.arguments[index + 1])
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

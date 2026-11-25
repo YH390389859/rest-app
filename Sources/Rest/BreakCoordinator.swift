@@ -61,11 +61,13 @@ final class BreakCoordinator {
     // MARK: 对外
 
     func skipCurrentBreak() {
+        guard let kind = scheduler.currentKind, settings.allowsSkip(kind) else { return }
         windowController.dismiss()
         scheduler.skipBreak()
     }
 
     func postponeBreak() {
+        guard let kind = scheduler.currentKind, settings.allowsPostpone(kind) else { return }
         windowController.dismiss()
         scheduler.postpone()
     }
@@ -95,8 +97,10 @@ final class BreakCoordinator {
         vm.mediaPaused = false
         vm.mediaNotice = nil
         vm.busyPausing = false
-        vm.workLabel = "\(Int(settings.workMinutes)) 分钟"
+        vm.workLabel = settings.nextWorkLabel
         vm.postponeLabel = "\(Int(settings.postponeMinutes)) 分钟"
+        vm.canSkip = settings.allowsSkip(kind)
+        vm.canPostpone = settings.allowsPostpone(kind)
 
         // 人不在电脑前就没必要弹遮罩
         let preview = isPreview

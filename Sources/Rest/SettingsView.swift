@@ -17,33 +17,62 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("工作时长") {
-                    Stepper(value: $settings.workMinutes, in: 1...180, step: 1) {
-                        Text("\(Int(settings.workMinutes)) 分钟").monospacedDigit()
-                    }
-                }
-                LabeledContent("微休息时长") {
+                Toggle("启用「小憩」", isOn: $settings.microEnabled)
+                LabeledContent("持续时间") {
                     Stepper(value: $settings.microBreakSeconds, in: 5...300, step: 5) {
                         Text("\(Int(settings.microBreakSeconds)) 秒").monospacedDigit()
                     }
                 }
-                LabeledContent("长休息时长") {
+                LabeledContent("每") {
+                    Stepper(value: $settings.microBreakEveryMinutes, in: 1...120, step: 1) {
+                        Text("\(Int(settings.microBreakEveryMinutes)) 分钟").monospacedDigit()
+                    }
+                }
+                Toggle("允许延后小憩", isOn: $settings.microAllowPostpone)
+                    .disabled(!settings.microEnabled || settings.microStrictMode)
+                Toggle("严格模式（不能跳过小憩）", isOn: $settings.microStrictMode)
+                    .disabled(!settings.microEnabled)
+            } header: {
+                Text("小憩")
+            } footer: {
+                Text("「小憩」是频率较高的短暂休息，可以用来伸展和放松。默认每 10 分钟一次，每次 20 秒。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("启用「休息」", isOn: $settings.longEnabled)
+                LabeledContent("持续时间") {
                     Stepper(value: $settings.longBreakMinutes, in: 1...60, step: 1) {
                         Text("\(Int(settings.longBreakMinutes)) 分钟").monospacedDigit()
                     }
                 }
-                LabeledContent("每几次微休息来一次长休息") {
-                    Stepper(value: $settings.breaksBeforeLong, in: 2...10, step: 1) {
-                        Text("\(Int(settings.breaksBeforeLong)) 次").monospacedDigit()
+                LabeledContent("每") {
+                    Stepper(value: $settings.microsBeforeLong, in: 1...12, step: 1) {
+                        Text("\(Int(settings.microsBeforeLong)) 次小憩（约每 \(Int(settings.longCycleMinutes)) 分钟）")
+                            .monospacedDigit()
                     }
                 }
-                LabeledContent("推迟时长") {
+                Toggle("允许延后休息", isOn: $settings.longAllowPostpone)
+                    .disabled(!settings.longEnabled || settings.longStrictMode)
+                Toggle("严格模式（不能跳过休息）", isOn: $settings.longStrictMode)
+                    .disabled(!settings.longEnabled)
+            } header: {
+                Text("休息")
+            } footer: {
+                Text("「休息」频率较低、持续时间更长。默认每 3 个槽位一次，也就是 2 次小憩后、约 30 分钟时来一次 5 分钟的休息。\n休息是挂在槽位上的：小憩间隔 ×（小憩次数 + 1）。修改后从下一轮开始生效。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                LabeledContent("延后时长") {
                     Stepper(value: $settings.postponeMinutes, in: 1...30, step: 1) {
                         Text("\(Int(settings.postponeMinutes)) 分钟").monospacedDigit()
                     }
                 }
             } header: {
-                Text("节奏")
+                Text("延后")
             }
 
             Section {
@@ -112,7 +141,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 560, height: 720)
+        .frame(width: 560, height: 780)
     }
 }
 
@@ -131,7 +160,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func show() {
         if window == nil {
             let hosting = NSHostingView(rootView: SettingsView(settings: settings, onPreview: onPreview))
-            let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 720),
+            let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 780),
                                styleMask: [.titled, .closable, .miniaturizable],
                                backing: .buffered,
                                defer: false)

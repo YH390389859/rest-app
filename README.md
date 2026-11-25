@@ -20,9 +20,39 @@ open build/Rest.app        # 直接运行（或拖到 /Applications）
 调试用参数：
 
 ```bash
-./build/Rest.app/Contents/MacOS/Rest --preview              # 启动后立即弹一次休息界面
-./build/Rest.app/Contents/MacOS/Rest --render /tmp/ui.png   # 把界面离屏渲染成 PNG（不需要录屏权限）
+./build/Rest.app/Contents/MacOS/Rest --preview                    # 启动后立即弹一次休息界面
+./build/Rest.app/Contents/MacOS/Rest --render /tmp/ui.png         # 把休息界面离屏渲染成 PNG（不需要录屏权限）
+./build/Rest.app/Contents/MacOS/Rest --render-settings /tmp/s.png # 渲染设置界面（走窗口 cacheDisplay）
+./build/Rest.app/Contents/MacOS/Rest --verbose                    # 打印节奏与倒计时日志
 ```
+
+## 节奏模型（对齐 Stretchly）
+
+默认值直接照 Stretchly 来：
+
+| | 持续时间 | 间隔 |
+|---|---|---|
+| 小憩 | 20 秒 | 每 10 分钟 |
+| 休息 | 5 分钟 | 2 次小憩后（约 30 分钟） |
+
+这里有个容易搞错的地方：**长休息不是独立计时的，而是挂在「槽位」上**。Stretchly 的 `app/breaksPlanner.js` 里，每一段工作的长度都等于小憩间隔，然后靠 `breakNumber % (longBreakInterval + 1) === 0` 决定这次该小憩还是休息——托盘提示才会写成「下次休息 2 次小憩后」而不是「大约 20 分钟后」。所以设置里的「休息 每 30 分」其实是 10 分 × 3 个槽位的换算结果，改小憩间隔会连带改变休息的实际发生时间。
+
+几条随之而来的规则：
+
+- 每完成一次休息，计数归零重新数（10 → 20 → 30 分各一次，30 分那次是长休息）。
+- 跳过休息不占槽位；延后休息会把这一种休息的槽位还回去，N 分钟后再来同一种。
+- 只开小憩或只开休息时退化成纯时间间隔：只开休息的话，一段工作就直接等于一个完整周期。
+- 「严格模式」按类型分别生效，打开后对应类型的跳过 / 延后按钮和菜单项都会被禁用。
+
+## 图标
+
+`Resources/AppIcon.icns` 由 `tools/make-icon.swift` 生成：CoreGraphics 画渐变圆角方块（Apple 的 1024/824/185 网格）+ 白色茶杯 + 两道热气，10 个尺寸交给 `iconutil` 打包成 icns。改配色或造型后重新生成：
+
+```bash
+swiftc -O tools/make-icon.swift -o /tmp/makeicon && /tmp/makeicon Resources/AppIcon.icns
+```
+
+`build.sh` 在 icns 缺失时会自动调用它，所以克隆下来直接 `./build.sh` 也有图标。
 
 ## 三个问题的技术实现
 
@@ -98,7 +128,7 @@ Sources/Rest/
   main.swift                  入口，设置 accessory 激活策略（纯菜单栏）
   AppDelegate.swift           组装与首启逻辑
   AppSettings.swift           全部设置项（UserDefaults）+ 空闲检测 + 音效
-  Scheduler.swift             工作/休息状态机（基于 deadline，非累加计数）
+  Scheduler.swift             工作/休息状态机（槽位计数决定小憩还是休息）
   AudioActivityMonitor.swift  CoreAudio 进程对象枚举
   MediaRemoteBridge.swift     MediaRemote 私有框架的 dlsym 封装
   MediaController.swift       查询 / 暂停 / 恢复，含媒体键兜底
@@ -110,6 +140,9 @@ Sources/Rest/
   StatusBarController.swift   菜单栏图标与菜单
   SettingsView.swift          设置窗口
   DebugRender.swift           离屏渲染调试
+
+tools/
+  make-icon.swift             生成 AppIcon.icns
 ```
 
 计时用「目标时间戳」而不是自增计数器，睡眠唤醒后不会漂移。空闲超过 2 分钟会跳过这次休息（可在设置里关掉）。

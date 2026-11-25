@@ -45,9 +45,13 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
-        let header = NSMenuItem(title: headerText(), action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        menu.addItem(header)
+        menu.addItem(infoItem(headerText()))
+        if case .working = scheduler.state {
+            menu.addItem(infoItem("下次\(scheduler.upcomingKind.title) 大约 \(etaText) 后"))
+            if scheduler.upcomingKind == .micro, let n = scheduler.microsBeforeNextLong, n > 0 {
+                menu.addItem(infoItem("下次休息 \(n) 次小憩后"))
+            }
+        }
         menu.addItem(.separator())
 
         switch scheduler.state {
@@ -56,7 +60,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         case .working(let paused):
             menu.addItem(makeItem(paused ? "继续计时" : "暂停计时", #selector(toggleTimer)))
         case .breaking, .breakFinished:
-            menu.addItem(makeItem("跳过当前休息", #selector(skipBreakKey)))
+            let kind = scheduler.currentKind ?? .micro
+            let allowed = settings.allowsSkip(kind)
+            let skip = makeItem(allowed ? "跳过当前休息" : "严格模式：不能跳过", #selector(skipBreakKey))
+            skip.isEnabled = allowed
+            menu.addItem(skip)
         }
 
         menu.addItem(makeItem("立即休息", #selector(breakNow)))
@@ -70,6 +78,18 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let item = NSMenuItem(title: title, action: selector, keyEquivalent: key)
         item.target = self
         return item
+    }
+
+    private func infoItem(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
+    private var etaText: String {
+        let seconds = scheduler.remaining
+        if seconds < 60 { return "\(Int(seconds.rounded())) 秒" }
+        return "\(Int((seconds / 60).rounded())) 分钟"
     }
 
     private func headerText() -> String {

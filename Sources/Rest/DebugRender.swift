@@ -54,8 +54,38 @@ enum DebugRender {
 
     private static func render(vm: BreakViewModel, size: CGSize, to path: String) {
         let view = BreakView(vm: vm).frame(width: size.width, height: size.height)
+        write(view, scale: 1.0, to: path)
+    }
+
+    /// 把设置界面渲染成 PNG（检查排版用）。
+    /// Form 是 AppKit 支撑的视图，ImageRenderer 渲不出内容，所以走窗口的 cacheDisplay——
+    /// 这是画自己窗口的内容，不需要录屏权限。
+    static func renderSettings(path: String) {
+        let hosting = NSHostingView(rootView: SettingsView(settings: AppSettings.shared))
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 780),
+                           styleMask: [.titled, .closable],
+                           backing: .buffered,
+                           defer: false)
+        win.contentView = hosting
+        win.orderFront(nil)
+        hosting.layoutSubtreeIfNeeded()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            if let view = win.contentView,
+               let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: rep)
+                if let png = rep.representation(using: .png, properties: [:]) {
+                    try? png.write(to: URL(fileURLWithPath: path))
+                    NSLog("Rest: 已渲染 \(path)")
+                }
+            }
+            NSApp.terminate(nil)
+        }
+    }
+
+    private static func write<V: View>(_ view: V, scale: CGFloat, to path: String) {
         let renderer = ImageRenderer(content: view)
-        renderer.scale = 1.0
+        renderer.scale = scale
         guard let image = renderer.nsImage,
               let tiff = image.tiffRepresentation,
               let rep = NSBitmapImageRep(data: tiff),
