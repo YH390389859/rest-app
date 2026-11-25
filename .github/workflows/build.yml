@@ -17,8 +17,9 @@ concurrency:
 
 jobs:
   build:
-    # 通用二进制在 arm64 runner 上交叉编译 x86_64，跑完两个架构都能用
-    runs-on: macos-latest
+    # macos-latest 现在是 macOS 26 arm64，官方明确标注 arm64 容量紧张：
+    # 实测连排队 15 分钟会被直接 cancel。改用 Intel 镜像，通用二进制照样交叉编译出 arm64。
+    runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@v7
 
