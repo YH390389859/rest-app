@@ -61,6 +61,7 @@ final class BreakCoordinator {
             self?.vm.mode = .running
         }
         vm.onToggleAudio = { [weak self] id in self?.toggleAudio(id) }
+        vm.onNextAudio = { [weak self] id in self?.nextAudio(id) }
         vm.onPauseAllAudio = { [weak self] in
             Task { await self?.pauseAllAudio() }
         }
@@ -221,24 +222,37 @@ final class BreakCoordinator {
 
         vm.audioRows = merged.map { source in
             BreakViewModel.AudioRow(id: source.bundleID,
-                                    name: source.name,
+                                    title: source.displayTitle,
+                                    detail: detail(for: source),
                                     icon: source.icon(),
-                                    subtitle: subtitle(for: source),
                                     isNowPlaying: source.isNowPlaying,
                                     channel: source.channel,
+                                    canNext: source.canNext,
                                     paused: media.isPaused(source.bundleID),
                                     busy: busyAudioIDs.contains(source.bundleID))
         }
     }
 
-    private func subtitle(for source: MediaSource) -> String? {
-        if let title = source.title, !title.isEmpty { return title }
+    private func detail(for source: MediaSource) -> String? {
+        if let detail = source.displayDetail { return detail }
         if media.isPaused(source.bundleID) { return nil }
+        if source.isBrowser { return "网页音频" }
         if source.channel == .mediaRemote { return "系统正在播放" }
         if source.channel == .accessibility, !PerAppMediaControl.accessibilityTrusted {
             return "需「辅助功能」授权"
         }
-        return nil
+        return "正在播放"
+    }
+
+    private func nextAudio(_ id: String) {
+        guard let source = sources.first(where: { $0.bundleID == id }) else { return }
+        Task { [weak self] in
+            await self?.media.next(source)
+            // 切歌后封面/歌名会变，立刻刷新一次
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard let self, self.scheduler.currentKind != nil else { return }
+            await self.refreshAudio(pausePlaying: false)
+        }
     }
 
     private func toggleAudio(_ id: String) {

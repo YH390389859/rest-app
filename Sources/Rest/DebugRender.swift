@@ -9,15 +9,16 @@ enum DebugRender {
         let musicIcon = NSWorkspace.shared.icon(forFile: "/System/Applications/Music.app")
 
         func row(_ id: String,
-                 _ name: String,
+                 _ title: String,
+                 detail: String?,
                  icon: NSImage?,
-                 subtitle: String?,
                  nowPlaying: Bool = false,
                  channel: MediaChannel = .accessibility,
+                 canNext: Bool = false,
                  paused: Bool = false) -> BreakViewModel.AudioRow {
-            BreakViewModel.AudioRow(id: id, name: name, icon: icon, subtitle: subtitle,
-                                    isNowPlaying: nowPlaying, channel: channel,
-                                    paused: paused, busy: false)
+            BreakViewModel.AudioRow(id: id, title: title, detail: detail,
+                                    icon: icon, isNowPlaying: nowPlaying, channel: channel,
+                                    canNext: canNext, paused: paused, busy: false)
         }
 
         Task {
@@ -41,38 +42,41 @@ enum DebugRender {
                 return vm
             }
 
-            // 1. 多音频源：系统正在播放 + 已暂停 + 需授权
+            // 1. 多音频源：音乐 + 浏览器页签 + 已暂停的第三方播放器
             let multi = makeVM(remaining: 12, mode: .running)
             multi.audioRows = [
-                row("com.google.Chrome", "Google Chrome", icon: chromeIcon,
-                    subtitle: "【4K】雪山日出延时 · Nature Relax", nowPlaying: true, channel: .mediaRemote),
-                row("com.netease.163music", "网易云音乐", icon: nil,
-                    subtitle: "晴天 · 周杰伦", channel: .appleScript, paused: true),
-                row("com.apple.Music", "音乐", icon: musicIcon,
-                    subtitle: "需「辅助功能」授权", channel: .accessibility)
+                row("com.apple.Music", "Where You Taking My Baby?", detail: "BC Camplight · A Sober Conversation",
+                    icon: musicIcon, nowPlaying: true,
+                    channel: .mediaRemote, canNext: true),
+                row("com.google.Chrome", "Harvard CS50's Introduction to Computer Science", detail: "freeCodeCamp.org",
+                    icon: chromeIcon, channel: .mediaRemote),
+                row("com.netease.163music", "晴天", detail: "周杰伦 · 叶惠美",
+                    icon: nil, channel: .appleScript, canNext: true, paused: true)
             ]
             render(vm: multi, size: CGSize(width: 1440, height: 900), to: path)
 
             // 2. 全部暂停
             let paused = makeVM(remaining: 8, mode: .running)
             paused.audioRows = [
-                row("com.google.Chrome", "Google Chrome", icon: chromeIcon,
-                    subtitle: "【4K】雪山日出延时 · Nature Relax", nowPlaying: true,
-                    channel: .mediaRemote, paused: true),
-                row("com.netease.163music", "网易云音乐", icon: nil,
-                    subtitle: "晴天 · 周杰伦", channel: .appleScript, paused: true)
+                row("com.apple.Music", "Where You Taking My Baby?", detail: "BC Camplight · A Sober Conversation",
+                    icon: musicIcon, nowPlaying: true,
+                    channel: .mediaRemote, canNext: true, paused: true),
+                row("com.google.Chrome", "Harvard CS50's Introduction to Computer Science", detail: "freeCodeCamp.org",
+                    icon: chromeIcon, channel: .mediaRemote, paused: true)
             ]
             render(vm: paused, size: CGSize(width: 1440, height: 900),
                    to: path.replacingOccurrences(of: ".png", with: "-paused.png"))
 
-            // 3. 五个音频源（超过 3 行要能滚动）
+            // 3. 五个音频源（超过 3 行要压缩）
             let many = makeVM(remaining: 15, mode: .running)
             many.audioRows = [
-                row("a", "Google Chrome", icon: chromeIcon, subtitle: "【4K】雪山日出延时", nowPlaying: true, channel: .mediaRemote),
-                row("b", "网易云音乐", icon: nil, subtitle: "晴天 · 周杰伦", channel: .appleScript),
-                row("c", "音乐", icon: musicIcon, subtitle: nil, channel: .appleScript),
-                row("d", "Spotify", icon: nil, subtitle: "Lofi Beats", channel: .appleScript),
-                row("e", "腾讯会议", icon: nil, subtitle: "需「辅助功能」授权", channel: .accessibility)
+                row("a", "Where You Taking My Baby?", detail: "BC Camplight · A Sober Conversation",
+                    icon: musicIcon, nowPlaying: true, channel: .mediaRemote, canNext: true),
+                row("b", "Harvard CS50's Introduction", detail: "freeCodeCamp.org",
+                    icon: chromeIcon, channel: .mediaRemote),
+                row("c", "晴天", detail: "周杰伦 · 叶惠美", icon: nil, channel: .appleScript, canNext: true),
+                row("d", "Lofi Beats to Relax", detail: "Spotify", icon: nil, channel: .appleScript, canNext: true),
+                row("e", "腾讯会议", detail: "需「辅助功能」授权", icon: nil, channel: .accessibility)
             ]
             render(vm: many, size: CGSize(width: 1440, height: 900),
                    to: path.replacingOccurrences(of: ".png", with: "-many.png"))
@@ -98,10 +102,43 @@ enum DebugRender {
         }
     }
 
+    /// 调试用：打印当前识别到的音频源与元数据。
+    /// 不弹遮罩、不需要播放器配合，适合验证「歌名 / 歌手 / 页签署名」这条链路。
+    static func dumpMedia() {
+        var lines: [String] = []
+        func log(_ text: String) {
+            NSLog("Rest: [dump] %@", text)
+            lines.append(text)
+        }
+        Task {
+            // 启动瞬间 MediaRemote 可能还没连上 XPC，等一会儿再查（可用 REST_DUMP_DELAY 调整）
+            let delay = Double(ProcessInfo.processInfo.environment["REST_DUMP_DELAY"] ?? "1.5") ?? 1.5
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            log("MediaRemote available=\(MediaRemoteBridge.isAvailable ? 1 : 0)")
+            let nowPlaying = await MediaMetadata.systemNowPlaying()
+            let nowApp = NSRunningApplication(processIdentifier: nowPlaying.pid)
+            log("NowPlaying pid=\(nowPlaying.pid) bundle=\(nowApp?.bundleIdentifier ?? "-") "
+                + "playing=\(nowPlaying.isPlaying ? 1 : 0) title=\(nowPlaying.meta.title ?? "-") "
+                + "artist=\(nowPlaying.meta.artist ?? "-") album=\(nowPlaying.meta.album ?? "-")")
+
+            let sources = await MediaController.shared.snapshot()
+            log("共 \(sources.count) 个音频源")
+            for source in sources {
+                log("\(source.bundleID) | \(source.displayTitle) | \(source.displayDetail ?? "-") "
+                    + "| 渠道:\(source.channel.rawValue) | 下一首:\(source.canNext ? 1 : 0) "
+                    + "| 浏览器:\(source.isBrowser ? 1 : 0) | 音乐:\(source.isMusic ? 1 : 0)")
+            }
+            try? lines.joined(separator: "\n").write(toFile: "/tmp/rest-dump.txt",
+                                                     atomically: true, encoding: .utf8)
+            NSApp.terminate(nil)
+        }
+    }
+
     private static func render(vm: BreakViewModel, size: CGSize, to path: String) {
         let view = BreakView(vm: vm).frame(width: size.width, height: size.height)
         write(view, scale: 1.0, to: path)
     }
+
 
     /// 把设置界面渲染成 PNG（检查排版用）。
     /// Form 是 AppKit 支撑的视图，ImageRenderer 渲不出内容，所以走窗口的 cacheDisplay——

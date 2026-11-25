@@ -209,7 +209,7 @@ struct BreakView: View {
                     .transition(.opacity)
                 }
             }
-            .frame(maxWidth: 460)
+            .frame(maxWidth: 500)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(Color.black.opacity(0.42))
@@ -229,11 +229,12 @@ struct BreakView: View {
         }
     }
 
-    /// 超过 4 个时压缩行高，最多列 6 个，其余在底部说明（「全部暂停」仍会一并处理）
-    private var isCompactAudio: Bool { vm.audioRows.count > 4 }
-    private var audioRowHeight: CGFloat { isCompactAudio ? 32 : 38 }
-    private var visibleAudioRows: [BreakViewModel.AudioRow] { Array(vm.audioRows.prefix(6)) }
-    private var hiddenAudioCount: Int { max(0, vm.audioRows.count - 6) }
+    /// 超过 3 个时压缩行高；最多列 5 个，其余在底部说明（「全部暂停」仍会一并处理）
+    private var isCompactAudio: Bool { vm.audioRows.count > 3 }
+    private var audioRowHeight: CGFloat { isCompactAudio ? 52 : 64 }
+    private var iconSide: CGFloat { isCompactAudio ? 34 : 46 }
+    private var visibleAudioRows: [BreakViewModel.AudioRow] { Array(vm.audioRows.prefix(5)) }
+    private var hiddenAudioCount: Int { max(0, vm.audioRows.count - 5) }
 
     private var rowsStack: some View {
         VStack(spacing: 0) {
@@ -250,36 +251,37 @@ struct BreakView: View {
                     .foregroundStyle(.white.opacity(0.45))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 14)
-                    .frame(height: 28)
+                    .frame(height: 26)
             }
         }
-        .padding(.bottom, 6)
+        .padding(.vertical, 4)
     }
 
     private var divider: some View {
         Rectangle()
             .fill(Color.white.opacity(0.08))
             .frame(height: 0.5)
-            .padding(.leading, 42)
+            .padding(.leading, 14 + iconSide + 11)
     }
 
     private func audioRow(_ row: BreakViewModel.AudioRow) -> some View {
-        HStack(spacing: isCompactAudio ? 9 : 10) {
-            icon(for: row)
-            VStack(alignment: .leading, spacing: isCompactAudio ? 1 : 2) {
-                Text(row.name)
-                    .font(.system(size: isCompactAudio ? 12 : 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(row.paused ? 0.6 : 1))
+        HStack(spacing: 11) {
+            iconTile(row)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.title)
+                    .font(.system(size: isCompactAudio ? 12.5 : 13.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(row.paused ? 0.62 : 0.98))
                     .lineLimit(1)
-                if let subtitle = row.subtitle {
-                    Text(subtitle)
-                        .font(.system(size: isCompactAudio ? 9.5 : 10.5))
-                        .foregroundStyle(.white.opacity(row.paused ? 0.36 : 0.58))
+                    .truncationMode(.tail)
+                if let detail = row.detail {
+                    Text(detail)
+                        .font(.system(size: isCompactAudio ? 10 : 11))
+                        .foregroundStyle(.white.opacity(row.paused ? 0.38 : 0.6))
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        .truncationMode(.tail)
                 }
             }
-            Spacer(minLength: 10)
+            Spacer(minLength: 8)
             audioAction(for: row)
         }
         .padding(.horizontal, 14)
@@ -287,25 +289,33 @@ struct BreakView: View {
         .contentShape(Rectangle())
     }
 
-    @ViewBuilder
-    private func icon(for row: BreakViewModel.AudioRow) -> some View {
-        Group {
-            if let image = row.icon {
-                Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
+    /// 主视觉用应用自己的图标：比抓专辑封面稳定，也一眼能看出是哪个应用在响
+    private func iconTile(_ row: BreakViewModel.AudioRow) -> some View {
+        let side = iconSide
+        return ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(LinearGradient(colors: [Color.white.opacity(0.17), Color.white.opacity(0.05)],
+                                     startPoint: .topLeading,
+                                     endPoint: .bottomTrailing))
+
+            if let icon = row.icon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: side * 0.68, height: side * 0.68)
             } else {
-                // 没有图标（应用已退出 / 无法定位）时用首字母占位，比一个空心波形符号清楚
-                ZStack {
-                    RoundedRectangle(cornerRadius: 4.5, style: .continuous)
-                        .fill(Color.white.opacity(0.16))
-                    Text(String(row.name.prefix(1)))
-                        .font(.system(size: 9.5, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.85))
-                }
+                Text(String(row.title.prefix(1)))
+                    .font(.system(size: side * 0.38, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
             }
         }
-        .frame(width: isCompactAudio ? 16 : 19, height: isCompactAudio ? 16 : 19)
-        .opacity(row.paused ? 0.55 : 1)
-        .saturation(row.paused ? 0 : 1)
+        .frame(width: side, height: side)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.1), lineWidth: 0.6)
+        )
+        .opacity(row.paused ? 0.6 : 1)
+        .saturation(row.paused ? 0.4 : 1)
     }
 
     @ViewBuilder
@@ -313,24 +323,43 @@ struct BreakView: View {
         if row.busy {
             ProgressView()
                 .controlSize(.small)
-                .scaleEffect(0.55)
-                .frame(width: 46, height: 18)
-        } else if row.paused {
-            HStack(spacing: 7) {
-                Text("已暂停")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.white.opacity(0.6))
-                Button("恢复") { vm.onToggleAudio?(row.id) }
-                    .buttonStyle(MiniPillButtonStyle())
-            }
-        } else if row.channel.isControllable {
-            Button("暂停") { vm.onToggleAudio?(row.id) }
-                .buttonStyle(MiniPillButtonStyle())
-        } else {
+                .scaleEffect(0.5)
+                .frame(width: 58, height: 22)
+        } else if !row.channel.isControllable {
             Text("无法自动暂停")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.white.opacity(0.4))
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.38))
+        } else {
+            HStack(spacing: 6) {
+                if row.canNext {
+                    circleControl("forward.end.fill", size: 10,
+                                  help: "下一首") { vm.onNextAudio?(row.id) }
+                        .opacity(row.paused ? 0.5 : 0.72)
+                }
+                circleControl(row.paused ? "play.fill" : "pause.fill",
+                              size: 11,
+                              help: row.paused ? "恢复播放" : "暂停") {
+                    vm.onToggleAudio?(row.id)
+                }
+            }
         }
+    }
+
+    private func circleControl(_ symbol: String,
+                               size: CGFloat,
+                               help: String,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.92))
+                .frame(width: 26, height: 26)
+                .background(Circle().fill(Color.white.opacity(0.14)))
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.16), lineWidth: 0.6))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private var finishedBlock: some View {

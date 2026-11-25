@@ -123,11 +123,23 @@ Chromium / WebKit 的音频跑在 helper 进程里，代码里会把 `com.google
 
 都没有通道的（比如 `afplay` 这种没有界面也没有 bundle 的命令行进程）会如实显示「无法自动暂停」，而不是给一个按了没反应的按钮。
 
-界面上不再是一个「暂停「XXX」」按钮，而是一张音频卡片：每个应用一行（图标 + 名称 + 歌名/歌手 + 单独暂停/恢复），顶部有「全部暂停」。行数超过 4 个时自动压缩行高，超过 6 个时底部提示用「全部暂停」一起处理。休息期间每 5 秒刷新一次，中途开新视频也会列出来。
+界面上不再是一个「暂停「XXX」」按钮，而是一张音频卡片：每个应用一行，左边是应用图标（放大当主视觉），右边是「标题 + 副标题」，末尾是暂停/恢复和「下一首」按钮，顶部有「全部暂停」。超过 3 行自动压缩行高，最多列 5 行，其余提示用「全部暂停」一起处理。休息期间每 5 秒刷新一次，中途开新视频也会列出来。
+
+**标题 / 副标题从哪来**（`MediaMetadata`）：
+
+| 来源 | 标题 | 副标题 |
+| --- | --- | --- |
+| Music / Spotify / IINA / VLC | 歌名 | 歌手 · 专辑 |
+| Chrome / Safari 等浏览器 | 页签标题（网页 Media Session 的 title） | 站点名（artist） |
+| 拿不到元数据 | 应用名 | 正在播放 / 需「辅助功能」授权 |
+
+两级来源：**系统 Now Playing 槽位**（MediaRemote，无需授权；浏览器会把网页的 Media Session 发布到同一个槽位，所以能拿到「哪个页签在响」）和 **AppleScript**（`current track` / `current item`）。后者只在**已经授权「自动化」**时才读——用 `AEDeterminePermissionToAutomateTarget(askUserIfNeeded: false)` 静默探测，没授权就跳过，不会在休息遮罩弹出来的时候弹系统窗口。
+
+> ⚠️ **已知限制**：macOS 27 上 MediaRemote 的读取对 ad-hoc 签名的构建返回空——同一段代码用 Xcode 自带的 `swift-frontend` 跑能拿到完整字典（33 个键），换成自己编译的二进制（ad-hoc 签名）就只剩空字典。所以从源码 ad-hoc 构建的版本在浏览器上通常只能显示「网页音频」，音乐则依赖「自动化」授权后的 AppleScript。换成稳定证书（Developer ID 或本地自签名）签名后值得再验证一次。
 
 休息结束时只恢复**被我们暂停过、且现在还停在暂停状态**的那些：Now Playing 那个要求 PID 没变、`isPlaying` 仍为 false；AppleScript / AX 通道的要求该应用当前没有音频输出（说明用户没自己播起来）。
 
-降级链路：`MediaRemote pause` → 校验 `isPlaying == false` → 失败则模拟 `NX_KEYTYPE_PLAY` 媒体键（这条路需要辅助功能授权，所以只做兜底）。
+降级链路：先探一次 `MRMediaRemoteGetNowPlayingInfo`，**字典非空**才认为读得到系统状态（否则「暂停后 isPlaying == false」是假阳性）；再 `MediaRemote pause` → 校验 `isPlaying == false` → 失败则模拟 `NX_KEYTYPE_PLAY` 媒体键（这条路需要辅助功能授权，所以只做兜底）。
 
 自动暂停是**默认开启**的（`autoPauseMedia` 默认 `true`，休息结束自动恢复默认也开）。注意它读的是本地已保存的偏好：老版本装过、之后手动关掉的话，升级后仍然是关着的，去设置里确认一眼。休息中途新开的视频只会出现在列表里，不会自动按下去——避免和用户刚点的播放打架。
 

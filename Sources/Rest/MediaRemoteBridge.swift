@@ -14,6 +14,7 @@ enum MediaRemoteBridge {
         case pause = 1
         case togglePlayPause = 2
         case stop = 3
+        case nextTrack = 4
     }
 
     private typealias GetPIDFn = @convention(c) (DispatchQueue, @escaping (pid_t) -> Void) -> Void

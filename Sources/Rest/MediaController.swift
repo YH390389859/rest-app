@@ -29,15 +29,14 @@ final class MediaController {
 
     func snapshot() async -> [MediaSource] {
         let apps = AudioActivityMonitor.outputApps()
-        let playingPID = await MediaRemoteBridge.nowPlayingPID()
-        let isPlaying = await MediaRemoteBridge.isPlaying()
+        let nowPlaying = await MediaMetadata.systemNowPlaying()
 
         var nowBundle: String?
         var nowPID: pid_t = 0
         var nowName: String?
-        if playingPID > 0, let app = NSRunningApplication(processIdentifier: playingPID) {
+        if nowPlaying.pid > 0, let app = NSRunningApplication(processIdentifier: nowPlaying.pid) {
             nowBundle = Self.normalizedBundle(app.bundleIdentifier)
-            nowPID = playingPID
+            nowPID = nowPlaying.pid
             nowName = app.localizedName
         }
 
@@ -49,29 +48,39 @@ final class MediaController {
             guard !seen.contains(bundle) else { continue }
             seen.insert(bundle)
             let isNow = (bundle == nowBundle)
-            sources.append(MediaSource(bundleID: bundle,
-                                       name: app.name,
-                                       pid: app.pid,
-                                       title: nil,
-                                       isNowPlaying: isNow,
-                                       channel: channel(bundle, isNowPlaying: isNow)))
+            var source = MediaSource(bundleID: bundle,
+                                     name: app.name,
+                                     pid: app.pid,
+                                     isNowPlaying: isNow,
+                                     channel: channel(bundle, isNowPlaying: isNow))
+            source.isBrowser = MediaMetadata.isBrowser(bundle)
+            if isNow { apply(nowPlaying.meta, to: &source) }
+            sources.append(source)
         }
 
         // Now Playing 在播放但没出现在输出列表里（AirPlay、或刚切歌的瞬间），补一条
-        if isPlaying, let bundle = nowBundle, !seen.contains(bundle) {
+        if nowPlaying.isPlaying, let bundle = nowBundle, !seen.contains(bundle) {
             seen.insert(bundle)
-            sources.append(MediaSource(bundleID: bundle,
-                                       name: nowName ?? bundle,
-                                       pid: nowPID,
-                                       title: nil,
-                                       isNowPlaying: true,
-                                       channel: channel(bundle, isNowPlaying: true)))
+            var source = MediaSource(bundleID: bundle,
+                                     name: nowName ?? bundle,
+                                     pid: nowPID,
+                                     isNowPlaying: true,
+                                     channel: channel(bundle, isNowPlaying: true))
+            source.isBrowser = MediaMetadata.isBrowser(bundle)
+            apply(nowPlaying.meta, to: &source)
+            sources.append(source)
         }
 
-        // 标题只有 Now Playing 那个能拿到
-        if let index = sources.firstIndex(where: { $0.isNowPlaying }),
-           let title = await nowPlayingTitle() {
-            sources[index].title = title
+        // 系统槽位只放得下一个应用：其余正在出声的播放器用各自脚本字典补歌名
+        for index in sources.indices where !sources[index].isNowPlaying {
+            guard index < 4, sources[index].channel == .appleScript else { continue }
+            if let meta = await MediaMetadata.scripted(bundleID: sources[index].bundleID) {
+                apply(meta, to: &sources[index])
+            }
+        }
+
+        for index in sources.indices {
+            sources[index].canNext = canNext(sources[index])
         }
 
         // Now Playing 排最前，其余按名称
@@ -81,17 +90,17 @@ final class MediaController {
         }
     }
 
-    private func nowPlayingTitle() async -> String? {
-        let info = await MediaRemoteBridge.nowPlayingInfo()
-        func str(_ key: String) -> String? {
-            guard let raw = info[key] as? String else { return nil }
-            let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            return text.isEmpty ? nil : text
-        }
-        let title = str("kMRMediaRemoteNowPlayingInfoTitle")
-        let artist = str("kMRMediaRemoteNowPlayingInfoArtist")
-        if let title, let artist { return "\(title) · \(artist)" }
-        return title
+    private func apply(_ meta: TrackMetadata, to source: inout MediaSource) {
+        if let title = meta.title { source.title = title }
+        if let artist = meta.artist { source.artist = artist }
+        if let album = meta.album { source.album = album }
+        if meta.isMusic { source.isMusic = true }
+    }
+
+    /// 「下一首」只给确认是音乐内容、且确实有这条指令的应用，避免给网页视频配一个点了没反应的按钮
+    private func canNext(_ source: MediaSource) -> Bool {
+        if source.channel == .mediaRemote, source.isMusic, MediaRemoteBridge.isAvailable { return true }
+        return PerAppMediaControl.hasNextTrackCommand(forBundleID: source.bundleID)
     }
 
     /// Chromium / WebKit 的媒体会话挂在 helper 进程上，归并到主应用
@@ -167,6 +176,14 @@ final class MediaController {
     }
 
     private func pauseNowPlaying(_ source: MediaSource) async -> Bool {
+        // 先确认自己真的读得到系统状态。ad-hoc 签名的构建在部分系统上会被静默拒绝
+        // （查询立即返回空字典），这种情况下「暂停后 isPlaying == false」是假阳性，
+        // 会被误当成暂停成功，所以宁可放弃这条通道交给脚本 / 辅助功能。
+        let probe = await MediaRemoteBridge.nowPlayingInfo()
+        guard !probe.isEmpty else {
+            NSLog("Rest: 读不到系统 Now Playing 状态，跳过系统媒体控制")
+            return false
+        }
         if MediaRemoteBridge.send(.pause) {
             try? await Task.sleep(nanoseconds: 250_000_000)
             if await MediaRemoteBridge.isPlaying() == false {
@@ -192,6 +209,21 @@ final class MediaController {
                                                pid: source.pid,
                                                channel: channel,
                                                verb: verb)
+    }
+
+    // MARK: - 下一首
+
+    /// 只在界面确认 `canNext` 后调用：Now Playing 走系统指令，其余走脚本字典
+    func next(_ source: MediaSource) async {
+        if source.channel == .mediaRemote, MediaRemoteBridge.isAvailable,
+           MediaRemoteBridge.send(.nextTrack) {
+            NSLog("Rest: 用系统媒体控制让 %@ 切到下一首", source.name)
+            return
+        }
+        guard PerAppMediaControl.hasNextTrackCommand(forBundleID: source.bundleID) else { return }
+        _ = await PerAppMediaControl.runScriptAsync(
+            "tell application id \"\(source.bundleID)\" to next track")
+        NSLog("Rest: 用 AppleScript 让 %@ 切到下一首", source.name)
     }
 
     // MARK: - 恢复

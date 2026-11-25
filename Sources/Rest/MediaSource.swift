@@ -24,12 +24,35 @@ struct MediaSource: Identifiable {
     let bundleID: String
     var name: String
     var pid: pid_t
-    /// 只有系统 Now Playing 那个能拿到「歌名 · 歌手」
-    var title: String?
     var isNowPlaying: Bool
     var channel: MediaChannel
 
+    // MARK: 元数据
+
+    /// 歌名 / 视频标题 / 浏览器页签标题
+    var title: String?
+    var artist: String?
+    var album: String?
+    var isBrowser = false
+    var isMusic = false
+    /// 是否支持「下一首」
+    var canNext = false
+
     var id: String { bundleID }
+
+    /// 标题优先用媒体信息，拿不到就退回应用名
+    var displayTitle: String {
+        if let title, !title.isEmpty { return title }
+        return name
+    }
+
+    /// 副标题：音乐是「歌手 · 专辑」，浏览器是站点名
+    var displayDetail: String? {
+        var parts: [String] = []
+        if let artist, !artist.isEmpty { parts.append(artist) }
+        if let album, !album.isEmpty, album != artist { parts.append(album) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 
     func icon() -> NSImage? {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {

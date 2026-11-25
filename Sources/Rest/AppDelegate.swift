@@ -83,6 +83,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DebugRender.run(path: CommandLine.arguments[index + 1])
         }
 
+        // 调试用：--dump-media 打印当前音频源与元数据（歌名 / 歌手 / 封面）
+        if CommandLine.arguments.contains("--dump-media") {
+            DebugRender.dumpMedia()
+        }
+
         // 调试用：--render-settings <输出路径> [高度] 渲染设置界面
         if let index = CommandLine.arguments.firstIndex(of: "--render-settings"),
            CommandLine.arguments.count > index + 1 {

@@ -21,11 +21,15 @@ final class BreakViewModel: ObservableObject {
     // 音频源（休息时可能有多个应用同时在出声）
     struct AudioRow: Identifiable {
         let id: String
-        let name: String
+        /// 歌名 / 视频标题 / 页签标题，拿不到时是应用名
+        let title: String
+        /// 歌手 · 专辑；浏览器是站点名；再不行是状态提示
+        let detail: String?
+        /// 应用图标（界面里放大了当主视觉）
         let icon: NSImage?
-        let subtitle: String?
         let isNowPlaying: Bool
         let channel: MediaChannel
+        let canNext: Bool
         var paused: Bool
         var busy: Bool
     }
@@ -46,6 +50,7 @@ final class BreakViewModel: ObservableObject {
     var onContinue: (() -> Void)?
     var onExtend: (() -> Void)?
     var onToggleAudio: ((String) -> Void)?
+    var onNextAudio: ((String) -> Void)?
     var onPauseAllAudio: (() -> Void)?
 
     var progress: Double {

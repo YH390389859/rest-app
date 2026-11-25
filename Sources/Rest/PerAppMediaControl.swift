@@ -13,20 +13,24 @@ enum PerAppMediaControl {
 
     // MARK: - AppleScript
 
+    /// 是否已经拿到「自动化」授权。
+    ///
+    /// 用 `AEDeterminePermissionToAutomateTarget(askUserIfNeeded: false)` 静默查询：
+    /// 没授权就返回 false，**不会**弹系统弹窗。读元数据是锦上添花，不值得为了它
+    /// 在休息遮罩弹出来的时候打断用户；真正需要授权的是「暂停」，那条路会主动引导。
+    static func canAutomate(bundleID: String) -> Bool {
+        var target = AEAddressDesc()
+        let bytes = Array(bundleID.utf8)
+        guard AECreateDesc(typeApplicationBundleID, bytes, bytes.count, &target) == noErr else {
+            return false
+        }
+        defer { AEDisposeDesc(&target) }
+        return AEDeterminePermissionToAutomateTarget(&target, typeWildCard, typeWildCard, false) == noErr
+    }
+
     /// 目标应用脚本字典里与暂停相关的动词（读 sdef 文件，不会触发授权弹窗）
     static func scriptingVerbs(forBundleID bundleID: String) -> [String] {
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return [] }
-        let resources = url.appendingPathComponent("Contents/Resources")
-        guard let files = try? FileManager.default.contentsOfDirectory(at: resources,
-                                                                      includingPropertiesForKeys: nil,
-                                                                      options: .skipsHiddenFiles) else {
-            return []
-        }
-        var text = ""
-        for file in files where file.pathExtension.lowercased() == "sdef" {
-            if let chunk = try? String(contentsOf: file, encoding: .utf8) { text += chunk }
-        }
-        guard !text.isEmpty else { return [] }
+        guard let text = sdefText(forBundleID: bundleID) else { return [] }
 
         // <command name="pause" ...> —— 属性顺序不固定，用正则兜住
         guard let re = try? NSRegularExpression(pattern: "<command[^>]*name=\"(pause|playpause|play)\"") else {
@@ -40,6 +44,28 @@ enum PerAppMediaControl {
             if !verbs.contains(verb) { verbs.append(verb) }
         }
         return verbs
+    }
+
+    /// 脚本字典里是否声明了「下一首」（Music / Spotify 都是 `next track`）
+    static func hasNextTrackCommand(forBundleID bundleID: String) -> Bool {
+        guard let text = sdefText(forBundleID: bundleID) else { return false }
+        return text.contains("name=\"next track\"") || text.contains("name=\"nextTrack\"")
+    }
+
+    /// 把应用 Resources 目录下所有 .sdef 拼成一段文本（纯文件读取，无副作用）
+    private static func sdefText(forBundleID bundleID: String) -> String? {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return nil }
+        let resources = url.appendingPathComponent("Contents/Resources")
+        guard let files = try? FileManager.default.contentsOfDirectory(at: resources,
+                                                                      includingPropertiesForKeys: nil,
+                                                                      options: .skipsHiddenFiles) else {
+            return nil
+        }
+        var text = ""
+        for file in files where file.pathExtension.lowercased() == "sdef" {
+            if let chunk = try? String(contentsOf: file, encoding: .utf8) { text += chunk }
+        }
+        return text.isEmpty ? nil : text
     }
 
     /// 执行一段 AppleScript。阻塞式，调用方必须放到后台线程。
@@ -72,6 +98,53 @@ enum PerAppMediaControl {
         await Task.detached(priority: .userInitiated) {
             runScript(source, timeout: timeout)
         }.value
+    }
+
+    /// 执行脚本并取回 stdout（读元数据用）。
+    /// 元数据只是锦上添花，所以失败、超时、输出为空一律返回 nil，调用方静默降级。
+    static func runScriptOutput(_ source: String, timeout: TimeInterval = 2.0) async -> String? {
+        await Task.detached(priority: .utility) {
+            runScriptCapturing(source, timeout: timeout)
+        }.value
+    }
+
+    private static func runScriptCapturing(_ source: String, timeout: TimeInterval) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", source]
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning, Date() < deadline {
+            usleep(30_000)
+        }
+        if process.isRunning {
+            process.terminate()
+            return nil
+        }
+
+        let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+        if process.terminationStatus != 0 {
+            let message = String(data: errData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            NSLog("Rest: 元数据脚本失败(%d): %@", process.terminationStatus, message)
+            return nil
+        }
+
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        guard let text = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+            return nil
+        }
+        return text
     }
 
     // MARK: - 辅助功能
