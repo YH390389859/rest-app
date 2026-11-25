@@ -34,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         scheduler.start()
-        WallpaperService.prefetch(market: settings.wallpaperMarket)
+        WallpaperService.prepareNext(market: settings.wallpaperMarket)
 
         if !UserDefaults.standard.bool(forKey: "didFirstLaunch") {
             UserDefaults.standard.set(true, forKey: "didFirstLaunch")

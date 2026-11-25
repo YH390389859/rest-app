@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// 把「调度器 → 遮罩窗口 → 媒体暂停」串起来的地方
 @MainActor
@@ -9,6 +10,9 @@ final class BreakCoordinator {
     private let windowController: BreakWindowController
     private var pausedMedia: MediaController.PauseResult?
     private var isPreview = false
+
+    private let verbose = CommandLine.arguments.contains("--verbose")
+    private var lastLoggedSecond = -1
 
     init(settings: AppSettings, scheduler: Scheduler) {
         self.settings = settings
@@ -23,6 +27,17 @@ final class BreakCoordinator {
     private func wire() {
         scheduler.onBreakStart = { [weak self] kind, duration in
             self?.handleBreakStart(kind: kind, duration: duration)
+        }
+        scheduler.onBreakTick = { [weak self] remaining, _ in
+            guard let self else { return }
+            self.vm.remaining = remaining
+            if self.verbose {
+                let second = Int(remaining)
+                if second != self.lastLoggedSecond {
+                    self.lastLoggedSecond = second
+                    NSLog("Rest: 倒计时 %d", second)
+                }
+            }
         }
         scheduler.onBreakFinished = { [weak self] in
             self?.handleBreakFinished()
@@ -113,10 +128,25 @@ final class BreakCoordinator {
             return
         }
         let market = settings.wallpaperMarket
+
+        // 有预取好的就立刻换上，同时后台准备再下一张
+        if let ready = WallpaperService.takePreloaded(market: market) {
+            apply(ready)
+            WallpaperService.prepareNext(market: market)
+            return
+        }
+
         Task { [weak self] in
-            let wallpaper = await WallpaperService.load(market: market)
-            self?.vm.wallpaper = wallpaper?.image
-            self?.vm.wallpaperCredit = wallpaper?.credit ?? ""
+            let wallpaper = await WallpaperService.nextWallpaper(market: market)
+            self?.apply(wallpaper)
+            WallpaperService.prepareNext(market: market)
+        }
+    }
+
+    private func apply(_ wallpaper: Wallpaper?) {
+        withAnimation(.easeInOut(duration: 0.6)) {
+            vm.wallpaper = wallpaper?.image
+            vm.wallpaperCredit = wallpaper?.credit ?? ""
         }
     }
 

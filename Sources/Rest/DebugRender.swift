@@ -15,7 +15,7 @@ enum DebugRender {
         vm.mediaAppName = "Google Chrome"
 
         Task {
-            if let wallpaper = await WallpaperService.load(market: "zh-CN") {
+            if let wallpaper = await WallpaperService.nextWallpaper(market: "zh-CN") {
                 vm.wallpaper = wallpaper.image
                 vm.wallpaperCredit = wallpaper.credit
             }

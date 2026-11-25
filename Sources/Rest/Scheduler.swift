@@ -37,6 +37,8 @@ final class Scheduler {
 
     var onStateChange: (() -> Void)?
     var onBreakStart: ((BreakKind, TimeInterval) -> Void)?
+    /// 休息期间每 0.25s 触发一次，参数为（剩余, 总时长）——界面倒计时靠它驱动
+    var onBreakTick: ((TimeInterval, TimeInterval) -> Void)?
     var onBreakFinished: (() -> Void)?
     var onWorkStart: (() -> Void)?
 
@@ -191,6 +193,7 @@ final class Scheduler {
                 onBreakFinished?()
                 notifyState()
             } else {
+                onBreakTick?(remaining, total)
                 notifyState()
             }
         default:

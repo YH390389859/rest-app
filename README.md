@@ -66,7 +66,9 @@ Chromium / WebKit 的音频跑在 helper 进程里，代码里会把 `com.google
 https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN
 ```
 
-返回 JSON 里的 `images[0].url`（`/th?id=OHR.xxx_UHD.jpg`），拼上 `uhd=1&uhdwidth=3840&uhdheight=2160` 拿 4K 原图，`images[0].copyright` 作为署名显示在右下角。图片按 `日期-地区.jpg` 缓存在 `~/Library/Application Support/Rest/wallpapers/`，断网时回退到最近一张；每日首次启动会预取。
+返回 JSON 里的 `images[0].url`（`/th?id=OHR.xxx_UHD.jpg`），拼上 `uhd=1&uhdwidth=3840&uhdheight=2160` 拿 4K 原图，`images[0].copyright` 作为署名显示在右下角。
+
+**每次休息换一张新图**，而不是一天只换一次：用 `idx=0..7&n=8` 一次取回最近 8 天的图，用一份持久化的"上次用过的序号"轮换，保证相邻两次不重复。图片按图片 id 缓存在 `~/Library/Application Support/Rest/wallpapers/`，命中缓存直接读盘；断网时回退到已缓存的最近一张。休息开始前会**预取下一张**（`prepareNext`），所以点「立即休息」时是瞬间换图、没有等待空窗。
 
 ### 3. 休息结束的三种策略
 
@@ -111,6 +113,8 @@ Sources/Rest/
 ```
 
 计时用「目标时间戳」而不是自增计数器，睡眠唤醒后不会漂移。空闲超过 2 分钟会跳过这次休息（可在设置里关掉）。
+
+界面上的倒计时不是自己算的：`Scheduler` 每 0.25s 通过 `onBreakTick(remaining, total)` 把剩余时间推给 `BreakCoordinator`，后者写进 `BreakViewModel.remaining`。这样状态机和界面只有一个数据源，不会出现"环在转、数字不动"或反过来。
 
 ## 已知边界
 
