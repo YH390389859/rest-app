@@ -64,14 +64,23 @@ enum MediaRemoteBridge {
 
     /// 当前媒体是否真的在播放中（暂停时为 false）
     static func isPlaying(timeout: TimeInterval = 1.2) async -> Bool {
-        guard let fn = symbol("MRMediaRemoteGetNowPlayingApplicationIsPlaying", as: GetBoolFn.self) else { return false }
-        return await withCheckedContinuation { continuation in
+        await playingState(timeout: timeout) ?? false
+    }
+
+    /// 三态版本：`true` 在播 / `false` 已暂停 / `nil` 查不到（被系统拒绝或超时）。
+    ///
+    /// 必须区分「查不到」和「已暂停」——ad-hoc 签名的进程在部分系统上会被静默拒绝，
+    /// 查询直接超时。把它当成 `false` 会得出「暂停成功」的错误结论，
+    /// 而把它当成「通道不可用」又会连命令都不敢发（Chrome 就是这样被挡掉的）。
+    static func playingState(timeout: TimeInterval = 1.2) async -> Bool? {
+        guard let fn = symbol("MRMediaRemoteGetNowPlayingApplicationIsPlaying", as: GetBoolFn.self) else { return nil }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool?, Never>) in
             let box = OnceBox()
             fn(callbackQueue) { playing in
                 box.fire { continuation.resume(returning: playing) }
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                box.fire { continuation.resume(returning: false) }
+                box.fire { continuation.resume(returning: nil) }
             }
         }
     }

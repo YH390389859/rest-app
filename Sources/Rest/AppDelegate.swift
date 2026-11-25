@@ -88,6 +88,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DebugRender.dumpMedia()
         }
 
+        // 调试用：--test-pause [bundle 关键字] 对当前音频源执行一次暂停，验证通道是否真的可用
+        if CommandLine.arguments.contains("--test-pause") {
+            let index = CommandLine.arguments.firstIndex(of: "--test-pause") ?? 0
+            let keyword = CommandLine.arguments.count > index + 1 ? CommandLine.arguments[index + 1] : ""
+            DebugRender.testPause(keyword: keyword)
+        }
+
         // 调试用：--render-settings <输出路径> [高度] 渲染设置界面
         if let index = CommandLine.arguments.firstIndex(of: "--render-settings"),
            CommandLine.arguments.count > index + 1 {

@@ -103,6 +103,57 @@ enum DebugRender {
 
     /// 调试用：打印当前识别到的音频源与元数据。
     /// 不弹遮罩、不需要播放器配合，适合验证「歌名 / 歌手 / 页签署名」这条链路。
+    /// 调试用：对当前音频源执行一次真实的暂停，验证所选通道能不能用。
+    /// 结果写到 /tmp/rest-pause.txt，并列出暂停前后的音频输出状态。
+    static func testPause(keyword: String) {
+        var lines: [String] = []
+        func log(_ text: String) {
+            NSLog("Rest: [pause] %@", text)
+            lines.append(text)
+        }
+        Task {
+            let delay = Double(ProcessInfo.processInfo.environment["REST_DUMP_DELAY"] ?? "1.0") ?? 1.0
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+
+            let sources = await MediaController.shared.snapshot()
+            log("音频源 \(sources.count) 个；辅助功能授权=\(PerAppMediaControl.accessibilityTrusted ? 1 : 0)")
+            for source in sources {
+                log("  候选 \(source.bundleID) | \(source.name) | 渠道:\(source.channel.rawValue) | nowPlaying:\(source.isNowPlaying ? 1 : 0)")
+            }
+
+            let target = sources.first {
+                keyword.isEmpty || $0.bundleID.localizedCaseInsensitiveContains(keyword)
+                    || $0.name.localizedCaseInsensitiveContains(keyword)
+            }
+            guard let target else {
+                log("没有匹配「\(keyword)」的音频源")
+                try? lines.joined(separator: "\n").write(toFile: "/tmp/rest-pause.txt",
+                                                          atomically: true, encoding: .utf8)
+                NSApp.terminate(nil)
+                return
+            }
+
+            log("暂停目标: \(target.name)（渠道 \(target.channel.rawValue)）")
+            let used = await MediaController.shared.pause(target)
+            log("pause() 返回: \(used?.rawValue ?? "nil（失败）")")
+
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            let after = AudioActivityMonitor.outputApps()
+            log("暂停后仍在输出的应用: \(after.map(\.name).joined(separator: "、"))")
+            let stillPlaying = await MediaRemoteBridge.playingState()
+            log("系统 playingState: \(String(describing: stillPlaying))")
+
+            if ProcessInfo.processInfo.environment["REST_NO_RESUME"] == nil {
+                await MediaController.shared.resumeAll()
+                log("已尝试恢复播放")
+            }
+            try? lines.joined(separator: "\n").write(toFile: "/tmp/rest-pause.txt",
+                                                      atomically: true, encoding: .utf8)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            NSApp.terminate(nil)
+        }
+    }
+
     static func dumpMedia() {
         var lines: [String] = []
         func log(_ text: String) {
@@ -113,7 +164,10 @@ enum DebugRender {
             // 启动瞬间 MediaRemote 可能还没连上 XPC，等一会儿再查（可用 REST_DUMP_DELAY 调整）
             let delay = Double(ProcessInfo.processInfo.environment["REST_DUMP_DELAY"] ?? "1.5") ?? 1.5
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            log("MediaRemote available=\(MediaRemoteBridge.isAvailable ? 1 : 0)")
+            log("MediaRemote available=\(MediaRemoteBridge.isAvailable ? 1 : 0) "
+                + "playingState=\(String(describing: await MediaRemoteBridge.playingState())) "
+                + "辅助功能授权=\(PerAppMediaControl.accessibilityTrusted ? 1 : 0) "
+                + "pid=\(Bundle.main.bundleIdentifier ?? "-")")
             let nowPlaying = await MediaMetadata.systemNowPlaying()
             let nowApp = NSRunningApplication(processIdentifier: nowPlaying.pid)
             log("NowPlaying pid=\(nowPlaying.pid) bundle=\(nowApp?.bundleIdentifier ?? "-") "

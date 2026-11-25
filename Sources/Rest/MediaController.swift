@@ -42,6 +42,9 @@ final class MediaController {
 
         var sources: [MediaSource] = []
         var seen = Set<String>()
+        // 系统里只有一个应用在出声时，Now Playing 槽位必然是它。即使我们读不到
+        // Now Playing 的 PID（受限签名会被系统静默拒绝），也能安全地用系统命令控制。
+        let soleOutput = apps.count == 1
 
         for app in apps {
             let bundle = Self.normalizedBundle(app.bundleID) ?? app.bundleID
@@ -52,7 +55,7 @@ final class MediaController {
                                      name: app.name,
                                      pid: app.pid,
                                      isNowPlaying: isNow,
-                                     channel: channel(bundle, isNowPlaying: isNow))
+                                     channel: channel(bundle, isNowPlaying: isNow, soleOutput: soleOutput))
             source.isBrowser = MediaMetadata.isBrowser(bundle)
             if isNow { apply(nowPlaying.meta, to: &source) }
             sources.append(source)
@@ -65,7 +68,7 @@ final class MediaController {
                                      name: nowName ?? bundle,
                                      pid: nowPID,
                                      isNowPlaying: true,
-                                     channel: channel(bundle, isNowPlaying: true))
+                                     channel: channel(bundle, isNowPlaying: true, soleOutput: soleOutput))
             source.isBrowser = MediaMetadata.isBrowser(bundle)
             apply(nowPlaying.meta, to: &source)
             sources.append(source)
@@ -107,10 +110,13 @@ final class MediaController {
 
     // MARK: - 通道判定
 
-    private func channel(_ bundleID: String, isNowPlaying: Bool) -> MediaChannel {
+    private func channel(_ bundleID: String, isNowPlaying: Bool, soleOutput: Bool = false) -> MediaChannel {
         if isNowPlaying, MediaRemoteBridge.isAvailable { return .mediaRemote }
         // 没有 bundle id 的命令行进程（afplay 之类）既没有脚本字典也没有可点的按钮
         if bundleID.hasPrefix("pid:") { return .none }
+        // 读不到 Now Playing 但系统里只有它在出声：槽位必然是它。有脚本字典的播放器
+        // 优先走脚本（恢复更可靠），浏览器这类没脚本的用系统命令，绕开辅助功能。
+        if soleOutput, MediaRemoteBridge.isAvailable, !isScriptable(bundleID) { return .mediaRemote }
         if isScriptable(bundleID) { return .appleScript }
         // 剩下的一律尝试辅助功能：没授权时点击会引导去授权，而不是直接判死
         return .accessibility
@@ -166,26 +172,33 @@ final class MediaController {
     }
 
     private func pauseNowPlaying(_ source: MediaSource) async -> Bool {
-        // 先确认自己真的读得到系统状态。ad-hoc 签名的构建在部分系统上会被静默拒绝
-        // （查询立即返回空字典），这种情况下「暂停后 isPlaying == false」是假阳性，
-        // 会被误当成暂停成功，所以宁可放弃这条通道交给脚本 / 辅助功能。
-        let probe = await MediaRemoteBridge.nowPlayingInfo()
-        guard !probe.isEmpty else {
-            NSLog("Rest: 读不到系统 Now Playing 状态，跳过系统媒体控制")
-            return false
-        }
+        // 直接下发暂停，**不要**以「能否读到 Now Playing 数据」作为前提。
+        // 查不到数据只说明我们没权限读，命令本身仍然会投递给当前 Now Playing 的应用
+        // （Chrome / Safari 的网页 Media Session 就靠这条通道，辅助功能反而点不到它的自绘控件）。
         if MediaRemoteBridge.send(.pause) {
             try? await Task.sleep(nanoseconds: 250_000_000)
-            if await MediaRemoteBridge.isPlaying() == false {
+            switch await MediaRemoteBridge.playingState() {
+            case .some(false):
                 remember(source, channel: .mediaRemote, verb: "pause")
                 NSLog("Rest: 用系统媒体控制暂停了 %@", source.name)
                 return true
+
+            case .none:
+                // 读不到状态：命令已投递，按成功处理。系统 Now Playing 通道对这类应用
+                // 一直是有效的，判失败只会让界面误报「没响应」，也会丢掉恢复记录。
+                remember(source, channel: .mediaRemote, verb: "pause")
+                NSLog("Rest: 已向 %@ 下发暂停（读不到播放状态，按成功处理）", source.name)
+                return true
+
+            case .some(true):
+                break   // 确实还在播，走兜底
             }
         }
+
         // 兜底：模拟媒体键（部分播放器不响应 MediaRemote 指令）
         PerAppMediaControl.postPlayPauseKey()
         try? await Task.sleep(nanoseconds: 350_000_000)
-        if await MediaRemoteBridge.isPlaying() == false {
+        if await MediaRemoteBridge.playingState() != .some(true) {
             remember(source, channel: .mediaRemote, verb: "pause")
             NSLog("Rest: 用媒体键暂停了 %@", source.name)
             return true
@@ -222,9 +235,16 @@ final class MediaController {
         switch record.channel {
         case .mediaRemote:
             // 用户自己播起来了，或者换了播放器，就别插手
-            if await MediaRemoteBridge.isPlaying() { return }
+            if await MediaRemoteBridge.playingState() == .some(true) { return }
             let pid = await MediaRemoteBridge.nowPlayingPID()
             if pid > 0, pid != record.pid { return }
+            if pid == 0 {
+                // 读不到槽位归属：确认原来的应用还活着再发命令，
+                // 否则可能把「刚打开的其他播放器」当成目标播起来
+                let alive = NSRunningApplication(processIdentifier: record.pid) != nil
+                    || !NSRunningApplication.runningApplications(withBundleIdentifier: record.bundleID).isEmpty
+                guard alive else { return }
+            }
             if !MediaRemoteBridge.send(.play) {
                 PerAppMediaControl.postPlayPauseKey()
             }
