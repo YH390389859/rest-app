@@ -36,6 +36,7 @@ runner 用的是 `macos-26-intel` 而不是 `macos-latest`：后者现在是 mac
 
 ```bash
 ./build/Rest.app/Contents/MacOS/Rest --preview                    # 启动后立即弹一次休息界面
+./build/Rest.app/Contents/MacOS/Rest --test-rescreen              # 复现「分辨率变了窗口没跟上」，验证遮罩重铺
 ./build/Rest.app/Contents/MacOS/Rest --render /tmp/ui.png         # 把休息界面离屏渲染成 PNG（不需要录屏权限）
 ./build/Rest.app/Contents/MacOS/Rest --render-settings /tmp/s.png # 渲染设置界面（走窗口 cacheDisplay）
 ./build/Rest.app/Contents/MacOS/Rest --verbose                    # 打印节奏与倒计时日志

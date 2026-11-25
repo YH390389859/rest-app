@@ -48,6 +48,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // 调试用：--test-rescreen 复现「分辨率变了但窗口还是旧尺寸」，验证遮罩会重铺
+        if CommandLine.arguments.contains("--test-rescreen") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.coordinator.previewBreak()
+            }
+            // 把窗口改成过期的 1280x720，模拟显示器换分辨率后窗口没跟着走
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                for window in NSApp.windows where window is OverlayWindow {
+                    window.setFrame(NSRect(x: 0, y: 0, width: 1280, height: 720), display: true)
+                }
+                NSLog("Rest: [测试] 已把遮罩窗口改成过期尺寸 1280x720")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                NSLog("Rest: [测试] 模拟显示器参数变化")
+                NotificationCenter.default.post(
+                    name: NSApplication.didChangeScreenParametersNotification, object: nil)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4.2) {
+                let overlays = NSApp.windows.filter { $0 is OverlayWindow }
+                let screens = NSScreen.screens
+                let matched = overlays.allSatisfy { window in
+                    screens.contains { $0.frame == window.frame }
+                }
+                NSLog("Rest: [测试] 复查 %d 个遮罩窗口，与屏幕对齐: %@",
+                      overlays.count, matched ? "是" : "否")
+                NSApp.terminate(nil)
+            }
+        }
+
         // 调试用：--render <输出路径> 把休息界面离屏渲染成 PNG
         if let index = CommandLine.arguments.firstIndex(of: "--render"),
            CommandLine.arguments.count > index + 1 {

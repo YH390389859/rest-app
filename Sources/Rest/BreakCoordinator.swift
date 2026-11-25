@@ -128,7 +128,13 @@ final class BreakCoordinator {
         let screens: [NSScreen] = settings.allDisplays
             ? NSScreen.screens
             : [NSScreen.main].compactMap { $0 }
-        windowController.show(on: screens)
+        // 传闭包而不是数组：休息途中改分辨率/插拔屏幕时要按当前设置重新算
+        windowController.show(on: screens) { [weak self] in
+            guard let self else { return NSScreen.screens }
+            return self.settings.allDisplays
+                ? NSScreen.screens
+                : [NSScreen.main].compactMap { $0 }
+        }
 
         loadWallpaper()
         startAudioTracking()

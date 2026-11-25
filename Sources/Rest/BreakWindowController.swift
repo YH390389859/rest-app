@@ -15,6 +15,11 @@ final class BreakWindowController {
     private var monitors: [Any] = []
     private var shieldArmedAt: Date?
 
+    /// 当前该铺哪几块屏（由 Coordinator 根据「所有显示器」设置决定），分辨率变化时重新问一次
+    private var screenProvider: (() -> [NSScreen])?
+    private var screenObserver: NSObjectProtocol?
+    private var reflowWork: DispatchWorkItem?
+
     /// 透明遮罩期间捕获到第一次输入
     var onUserReturn: (() -> Void)?
 
@@ -29,10 +34,21 @@ final class BreakWindowController {
 
     // MARK: 显示 / 隐藏
 
-    func show(on screens: [NSScreen]) {
+    /// - Parameter provider: 重新计算目标屏幕的闭包，分辨率/显示器数量变化时会再调一次
+    func show(on screens: [NSScreen], provider: (() -> [NSScreen])? = nil) {
+        screenProvider = provider
+        makeWindows(on: screens.isEmpty ? [NSScreen.main].compactMap { $0 } : screens)
+
+        NSApp.activate(ignoringOtherApps: true)
+        windows.first?.makeKeyAndOrderFront(nil)
+        installMonitors()
+        observeScreenChanges()
+    }
+
+    /// 按给定屏幕铺满遮罩窗口（休息开始和分辨率变化时共用）
+    private func makeWindows(on targets: [NSScreen]) {
         dismissWindows()
 
-        let targets = screens.isEmpty ? [NSScreen.main].compactMap { $0 } : screens
         for screen in targets {
             let window = OverlayWindow(contentRect: screen.frame,
                                        styleMask: .borderless,
@@ -63,10 +79,6 @@ final class BreakWindowController {
             window.orderFrontRegardless()
             windows.append(window)
         }
-
-        NSApp.activate(ignoringOtherApps: true)
-        windows.first?.makeKeyAndOrderFront(nil)
-        installMonitors()
     }
 
     /// 进入全透明遮罩状态（窗口仍在，内容变全透明，继续吃掉输入）
@@ -88,7 +100,9 @@ final class BreakWindowController {
     func dismiss() {
         shieldArmedAt = nil
         removeMonitors()
+        removeScreenObserver()
         dismissWindows()
+        screenProvider = nil
     }
 
     private func dismissWindows() {
@@ -98,6 +112,63 @@ final class BreakWindowController {
             window.close()
         }
         windows.removeAll()
+    }
+
+    // MARK: 显示器变化
+
+    /// 休息途中改分辨率、插拔外接屏、开合盖，都会让窗口和屏幕对不上，需要整块重铺
+    private func observeScreenChanges() {
+        removeScreenObserver()
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scheduleReflow() }
+        }
+    }
+
+    private func removeScreenObserver() {
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
+            self.screenObserver = nil
+        }
+        reflowWork?.cancel()
+        reflowWork = nil
+    }
+
+    /// 一次切换会连发好几条通知（每个屏幕一条），合并成一次重建
+    private func scheduleReflow() {
+        guard isVisible else { return }
+        reflowWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.reflow() }
+        }
+        reflowWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+    }
+
+    private func reflow() {
+        guard isVisible else { return }
+        let screens = screenProvider?() ?? NSScreen.screens
+        let targets = screens.isEmpty ? [NSScreen.main].compactMap { $0 } : screens
+        NSLog("Rest: 显示器参数变化，重铺 %d 个遮罩窗口", targets.count)
+
+        makeWindows(on: targets)
+
+        let layout = zip(targets, windows)
+            .map { screen, window in
+                window.frame == screen.frame ? "OK \(NSStringFromRect(screen.frame))"
+                                             : "错位 \(NSStringFromRect(window.frame))"
+            }
+            .joined(separator: " | ")
+        NSLog("Rest: 重铺完成 %d 个窗口 — %@", windows.count, layout)
+
+        // 窗口是新的，输入监听器还挂在进程上，不用重装；只需要保证有一个 key window
+        // 能接键盘（Esc 跳过 / 透明遮罩下的任意键）。用户已经切走时别再抢焦点。
+        if NSApp.isActive {
+            windows.first?.makeKeyAndOrderFront(nil)
+        }
     }
 
     // MARK: 输入捕获
