@@ -4,16 +4,32 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 CONFIG="${1:-release}"
-echo "==> swift build -c $CONFIG"
-swift build -c "$CONFIG" --product Rest --disable-sandbox
 
-BIN=$(swift build -c "$CONFIG" --show-bin-path --disable-sandbox)/Rest
+# UNIVERSAL=1 时编出 arm64 + x86_64 的通用二进制（CI 里用；本机构建不必加，慢一倍）
+ARCH_FLAGS=()
+if [ "${UNIVERSAL:-0}" = "1" ]; then
+  echo "==> 通用二进制（arm64 + x86_64）"
+  ARCH_FLAGS=(--arch arm64 --arch x86_64)
+fi
+
+echo "==> swift build -c $CONFIG"
+swift build -c "$CONFIG" --product Rest --disable-sandbox ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
+
+BIN=$(swift build -c "$CONFIG" --show-bin-path --disable-sandbox ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"})/Rest
 APP="build/Rest.app"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Rest"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+
+# VERSION=v1.2.3 时把版本号写进 Info.plist（CI 打 tag 用）
+if [ -n "${VERSION:-}" ]; then
+  PLAIN="${VERSION#v}"
+  echo "==> 版本号 $PLAIN"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $PLAIN" "$APP/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $PLAIN" "$APP/Contents/Info.plist"
+fi
 
 # 图标：缺了就现场生成（生成脚本只依赖系统框架）
 if [ ! -f Resources/AppIcon.icns ]; then

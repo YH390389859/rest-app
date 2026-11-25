@@ -1,5 +1,7 @@
 # Rest
 
+[![build](https://github.com/YH390389859/rest-app/actions/workflows/build.yml/badge.svg)](https://github.com/YH390389859/rest-app/actions/workflows/build.yml)
+
 一个参考 [Stretchly](https://github.com/hovancik/stretchly) 思路、用原生 Swift + AppKit/SwiftUI 写的 macOS 休息提醒菜单栏应用。
 
 针对三个具体痛点做了重做：
@@ -11,11 +13,19 @@
 ## 构建与运行
 
 ```bash
-./build.sh                 # 产出 build/Rest.app
-open build/Rest.app        # 直接运行（或拖到 /Applications）
+./build.sh                          # 产出 build/Rest.app（arm64）
+./build.sh release --install        # 顺带装到 /Applications 并启动
+UNIVERSAL=1 ./build.sh release      # 通用二进制（arm64 + x86_64），慢一倍
+VERSION=v1.2.0 ./build.sh release   # 指定版本号，写进 Info.plist
+open build/Rest.app                 # 直接运行（或拖到 /Applications）
 ```
 
 要求 macOS 14+、Xcode 命令行工具。打包是 ad-hoc 签名；"登录时自动启动"需要把 App 放到 `/Applications` 才能真正生效。
+
+### 自动打包
+
+`.github/workflows/build.yml`：push 到 `main`、开 PR、手动触发都会跑，产出 arm64 + x86_64 的通用二进制 zip，作为 artifact 保留 30 天；推一个 `v*` tag（如 `git tag v1.0.1 && git push --tags`）会把版本号写进 Info.plist，并把 zip 直接发到 GitHub Releases。
+
 
 调试用参数：
 
