@@ -3,7 +3,17 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-CONFIG="${1:-release}"
+CONFIG=release
+INSTALL=0
+MAKE_DMG=0
+for arg in "$@"; do
+  case "$arg" in
+    release|debug) CONFIG="$arg" ;;
+    --install)     INSTALL=1 ;;
+    --dmg)         MAKE_DMG=1 ;;
+    *) echo "!! 未知参数: $arg"; exit 1 ;;
+  esac
+done
 
 # UNIVERSAL=1 时编出 arm64 + x86_64 的通用二进制（CI 里用；本机构建不必加，慢一倍）
 ARCH_FLAGS=()
@@ -47,10 +57,16 @@ codesign --force --sign - --identifier com.yanghui.rest "$APP" >/dev/null 2>&1 |
 
 echo "==> 完成: $APP"
 
+# 可选：./build.sh release --dmg
+# 打包成 dist/Rest-<版本>.dmg，双击挂载后把 Rest 拖进「应用程序」
+if [ "$MAKE_DMG" = "1" ]; then
+  bash tools/make-dmg.sh "$APP" dist
+fi
+
 # 可选：./build.sh release --install
 # 装到「应用程序」再运行。TCC 的辅助功能授权是按路径 + 签名记的，从 build/ 直接跑
 # 每次重新编译都会失效，装到固定位置后只需要重新勾选，不会再多出一条「Rest」。
-if [ "${2:-}" = "--install" ]; then
+if [ "$INSTALL" = "1" ]; then
   DEST="/Applications/Rest.app"
   echo "==> 安装到 $DEST"
   osascript -e 'tell application "Rest" to quit' >/dev/null 2>&1 || true

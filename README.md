@@ -14,17 +14,20 @@
 
 ```bash
 ./build.sh                          # 产出 build/Rest.app（arm64）
+./build.sh release --dmg            # 顺带打 dist/Rest-1.0.0.dmg
 ./build.sh release --install        # 顺带装到 /Applications 并启动
 UNIVERSAL=1 ./build.sh release      # 通用二进制（arm64 + x86_64），慢一倍
 VERSION=v1.2.0 ./build.sh release   # 指定版本号，写进 Info.plist
 open build/Rest.app                 # 直接运行（或拖到 /Applications）
 ```
 
+DMG 里就是 `Rest.app` + 一个指向 `/Applications` 的快捷方式，双击挂载后拖过去即可。嫌不够好看可以自己加背景图和图标位置，但那样得靠 Finder 摆（CI 里没有 Finder 会话，AppleScript 会失败），所以这里保持纯 `hdiutil`、无脚本依赖。
+
 要求 macOS 14+、Xcode 命令行工具。打包是 ad-hoc 签名；"登录时自动启动"需要把 App 放到 `/Applications` 才能真正生效。
 
 ### 自动打包
 
-`.github/workflows/build.yml`：push 到 `main`、开 PR、手动触发都会跑，产出 arm64 + x86_64 的通用二进制 zip，作为 artifact 保留 30 天；推一个 `v*` tag（如 `git tag v1.0.1 && git push --tags`）会把版本号写进 Info.plist，并把 zip 直接发到 GitHub Releases。
+`.github/workflows/build.yml`：push 到 `main`、开 PR、手动触发都会跑，产出 arm64 + x86_64 的通用二进制，同时打 `.zip` 和 `.dmg`，作为 artifact 保留 30 天；推一个 `v*` tag（如 `git tag v1.0.1 && git push --tags`）会把版本号写进 Info.plist，并把两个包直接发到 GitHub Releases。
 
 
 调试用参数：
