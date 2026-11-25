@@ -29,6 +29,8 @@ DMG 里就是 `Rest.app` + 一个指向 `/Applications` 的快捷方式，双击
 
 `.github/workflows/build.yml`：push 到 `main`、开 PR、手动触发都会跑，产出 arm64 + x86_64 的通用二进制，同时打 `.zip` 和 `.dmg`，作为 artifact 保留 30 天；推一个 `v*` tag（如 `git tag v1.0.1 && git push --tags`）会把版本号写进 Info.plist，并把两个包直接发到 GitHub Releases。
 
+runner 用的是 `macos-26-intel` 而不是 `macos-latest`：后者现在是 macOS 26 arm64，实测排队 15 分钟会被系统直接 cancel（官方注解只提"队列变长"，没提这茬）。Intel 镜像基本秒分配，通用二进制照样交叉编译出 arm64。
+
 
 调试用参数：
 
