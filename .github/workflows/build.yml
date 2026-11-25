@@ -48,7 +48,19 @@ jobs:
       - name: 校验产物
         run: |
           set -euo pipefail
-          lipo -info build/Rest.app/Contents/MacOS/Rest
+          BIN="build/Rest.app/Contents/MacOS/Rest"
+          lipo -info "$BIN"
+
+          # Intel runner 上交叉编译，必须确认 arm64 切片真的在：少一个架构就直接失败，
+          # 避免哪天有人去掉 UNIVERSAL 后悄悄发出去一个只能在 Intel 上跑的包。
+          ARCHS="$(lipo -archs "$BIN")"
+          for need in arm64 x86_64; do
+            if [[ " $ARCHS " != *" $need "* ]]; then
+              echo "!! 产物缺少 $need 架构，实际是: $ARCHS"; exit 1
+            fi
+          done
+          echo "架构检查通过: $ARCHS"
+
           codesign --verify --strict build/Rest.app
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' build/Rest.app/Contents/Info.plist
           /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/Rest.app/Contents/Info.plist
