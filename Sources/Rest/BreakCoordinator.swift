@@ -8,8 +8,15 @@ final class BreakCoordinator {
     private let scheduler: Scheduler
     private let vm = BreakViewModel()
     private let windowController: BreakWindowController
-    private var pausedMedia: MediaController.PauseResult?
+    private let media = MediaController.shared
     private var isPreview = false
+
+    /// 当前这轮休息看到的音频源（点击行按钮时按 id 找回来）
+    private var sources: [MediaSource] = []
+    /// 已被我们暂停、但可能已经从音频列表里消失的应用（保留在界面上，方便手动恢复）
+    private var pausedExtras: [String: MediaSource] = [:]
+    private var busyAudioIDs: Set<String> = []
+    private var audioRefreshTask: Task<Void, Never>?
 
     private let verbose = CommandLine.arguments.contains("--verbose")
     private var lastLoggedSecond = -1
@@ -53,8 +60,9 @@ final class BreakCoordinator {
             self?.scheduler.extendBreak(by: 60)
             self?.vm.mode = .running
         }
-        vm.onPauseMedia = { [weak self] in
-            Task { await self?.pauseMedia() }
+        vm.onToggleAudio = { [weak self] id in self?.toggleAudio(id) }
+        vm.onPauseAllAudio = { [weak self] in
+            Task { await self?.pauseAllAudio() }
         }
     }
 
@@ -86,17 +94,18 @@ final class BreakCoordinator {
     // MARK: 休息开始
 
     private func handleBreakStart(kind: BreakKind, duration: TimeInterval) {
-        pausedMedia = nil
         NSLog("Rest: 休息开始 \(kind.rawValue) \(Int(duration))s")
 
         vm.kind = kind
         vm.total = duration
         vm.remaining = duration
         vm.mode = .running
-        vm.mediaAppName = nil
-        vm.mediaPaused = false
-        vm.mediaNotice = nil
-        vm.busyPausing = false
+        vm.audioRows = []
+        vm.audioNotice = nil
+        vm.audioBusyAll = false
+        sources = []
+        pausedExtras = [:]
+        busyAudioIDs = []
         vm.workLabel = settings.nextWorkLabel
         vm.postponeLabel = "\(Int(settings.postponeMinutes)) 分钟"
         vm.canSkip = settings.allowsSkip(kind)
@@ -122,7 +131,7 @@ final class BreakCoordinator {
         windowController.show(on: screens)
 
         loadWallpaper()
-        inspectMedia()
+        startAudioTracking()
     }
 
     private func loadWallpaper() {
@@ -154,42 +163,135 @@ final class BreakCoordinator {
         }
     }
 
-    // MARK: 媒体
+    // MARK: 音频
 
-    private func inspectMedia() {
-        Task { [weak self] in
+    /// 休息开始时抓一次音频源，之后每 5 秒刷新（用户中途开新视频也能列出来）
+    private func startAudioTracking() {
+        audioRefreshTask?.cancel()
+        let autoPause = settings.autoPauseMedia
+        audioRefreshTask = Task { [weak self] in
             guard let self else { return }
-            let info = await MediaController.shared.currentPlayback()
-            guard info.hasAnything else { return }
+            await self.refreshAudio(pausePlaying: autoPause)
 
-            self.vm.mediaAppName = info.appName
-
-            if info.isPlaying {
-                if self.settings.autoPauseMedia {
-                    await self.pauseMedia()
-                } else {
-                    self.vm.mediaNotice = "「\(info.appName ?? "播放器")」正在播放"
-                }
-            } else if let first = info.audioApps.first {
-                self.vm.mediaNotice = "「\(first.name)」正在占用音频输出"
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled, self.scheduler.currentKind != nil else { break }
+                await self.refreshAudio(pausePlaying: false)
             }
         }
     }
 
-    private func pauseMedia() async {
-        guard !vm.busyPausing else { return }
-        vm.busyPausing = true
-        defer { vm.busyPausing = false }
+    private func refreshAudio(pausePlaying: Bool) async {
+        let list = await media.snapshot()
+        sources = list
+        applyAudioRows(list)
 
-        let result = await MediaController.shared.pauseCurrentPlayback(force: true)
-        if let result {
-            pausedMedia = result
-            vm.mediaPaused = true
-            vm.mediaAppName = result.appName
-            vm.mediaNotice = nil
-        } else {
-            vm.mediaNotice = "没能自动暂停，可以点按钮再试一次"
+        guard pausePlaying else { return }
+        let targets = list.filter { !media.isPaused($0.bundleID) && $0.channel.isControllable }
+        guard !targets.isEmpty else { return }
+
+        vm.audioBusyAll = true
+        var failed: [String] = []
+        for source in targets {
+            if await media.pause(source) == nil {
+                failed.append(source.name)
+            } else {
+                pausedExtras[source.bundleID] = source
+            }
         }
+        vm.audioBusyAll = false
+        applyAudioRows(sources)
+        if !failed.isEmpty {
+            vm.audioNotice = "「\(failed.joined(separator: "、"))」没响应暂停指令，可以手动暂停"
+        }
+    }
+
+    private func applyAudioRows(_ list: [MediaSource]) {
+        var merged = list
+        for (id, source) in pausedExtras
+        where media.isPaused(id) && !merged.contains(where: { $0.bundleID == id }) {
+            merged.append(source)
+        }
+
+        vm.audioRows = merged.map { source in
+            BreakViewModel.AudioRow(id: source.bundleID,
+                                    name: source.name,
+                                    icon: source.icon(),
+                                    subtitle: subtitle(for: source),
+                                    isNowPlaying: source.isNowPlaying,
+                                    channel: source.channel,
+                                    paused: media.isPaused(source.bundleID),
+                                    busy: busyAudioIDs.contains(source.bundleID))
+        }
+    }
+
+    private func subtitle(for source: MediaSource) -> String? {
+        if let title = source.title, !title.isEmpty { return title }
+        if media.isPaused(source.bundleID) { return nil }
+        if source.channel == .mediaRemote { return "系统正在播放" }
+        if source.channel == .accessibility, !PerAppMediaControl.accessibilityTrusted {
+            return "需「辅助功能」授权"
+        }
+        return nil
+    }
+
+    private func toggleAudio(_ id: String) {
+        Task { [weak self] in
+            guard let self,
+                  let source = self.sources.first(where: { $0.bundleID == id }) ?? self.pausedExtras[id] else {
+                return
+            }
+
+            if self.media.isPaused(id) {
+                self.pausedExtras[id] = nil
+                await self.media.resume(bundleID: id)
+                self.applyAudioRows(self.sources)
+                return
+            }
+
+            self.busyAudioIDs.insert(id)
+            self.applyAudioRows(self.sources)
+            // 需要辅助功能但还没授权：这次先拉起系统引导，授权后再点一次就生效
+            if source.channel == .accessibility, !PerAppMediaControl.accessibilityTrusted {
+                PerAppMediaControl.requestAccessibility()
+            }
+            let channel = await self.media.pause(source)
+            self.busyAudioIDs.remove(id)
+
+            if channel != nil {
+                self.pausedExtras[id] = source
+                self.vm.audioNotice = nil
+            } else {
+                self.vm.audioNotice = self.failureNotice(for: source)
+            }
+            self.applyAudioRows(self.sources)
+        }
+    }
+
+    private func pauseAllAudio() async {
+        guard !vm.audioBusyAll else { return }
+        vm.audioBusyAll = true
+        defer { vm.audioBusyAll = false }
+
+        var failed: [String] = []
+        for source in sources where !media.isPaused(source.bundleID) && source.channel.isControllable {
+            if await media.pause(source) == nil {
+                failed.append(source.name)
+            } else {
+                pausedExtras[source.bundleID] = source
+            }
+        }
+        applyAudioRows(sources)
+        vm.audioNotice = failed.isEmpty
+            ? nil
+            : "「\(failed.joined(separator: "、"))」没响应暂停指令，可以手动暂停"
+    }
+
+    private func failureNotice(for source: MediaSource) -> String {
+        if source.channel == .accessibility, !PerAppMediaControl.accessibilityTrusted {
+            return "「\(source.name)」需要「辅助功能」授权，允许后再点一次即可"
+        }
+        return "「\(source.name)」没响应暂停指令，可以手动暂停"
     }
 
     // MARK: 休息结束
@@ -215,11 +317,18 @@ final class BreakCoordinator {
         windowController.dismiss()
         vm.mode = .running
 
-        if let paused = pausedMedia {
-            pausedMedia = nil
-            if settings.resumeMediaAfterBreak {
-                Task { await MediaController.shared.resume(paused) }
-            }
+        audioRefreshTask?.cancel()
+        audioRefreshTask = nil
+        sources = []
+        pausedExtras = [:]
+        busyAudioIDs = []
+        vm.audioRows = []
+        vm.audioNotice = nil
+
+        if settings.resumeMediaAfterBreak {
+            Task { await media.resumeAll() }
+        } else {
+            media.discardPaused()
         }
     }
 }

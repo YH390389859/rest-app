@@ -86,9 +86,32 @@ Chromium / WebKit 的音频跑在 helper 进程里，代码里会把 `com.google
 | togglePlayPause | 2 |
 | stop | 3 |
 
-它和键盘上的媒体键效果等价，但**不需要辅助功能授权**，也不会像 AppleScript 那样弹出「自动化」权限申请、更不会因为某个 App 没开 AppleScript 支持而失败。
+它和键盘上的媒体键效果等价，但**不需要辅助功能授权**，也不会像 AppleScript 那样弹出「自动化」权限申请。
 
-降级链路：`MediaRemote pause` → 校验 `isPlaying == false` → 失败则模拟 `NX_KEYTYPE_PLAY` 媒体键（这条路需要辅助功能授权，所以只做兜底）。休息结束时只恢复"原本被我们暂停的那个 App"，用户自己又开了别的视频则不动。
+**多个播放器同时出声时的问题** —— 系统只有一个 Now Playing 槽位，`MRMediaRemoteSendCommand` 只会作用在其中一个上，Chrome 在放视频、网易云在放歌时，另一个照旧响。
+
+有个看起来更合适的私有 API `MRMediaRemoteSendCommandToApp`（可以按 bundle id 定向下发），但实测/查证结论是**用不了**：
+
+- 它的真实签名是 7 个参数（`command, options, MROriginProtobuf, bundleID, sendOptions, queue, block`）；
+- 更重要的是，第三方签名的进程调用后，指令会被系统**重定向到当前 Now Playing 播放器**；真正定向路由需要 Apple 私有的 `com.apple.mediaremote.send-commands` entitlement，外部签名一加就会在启动时崩溃。
+
+所以这里改成**逐个应用挑选可用通道**，由 `PerAppMediaControl` 实现：
+
+| 通道 | 用在谁身上 | 代价 |
+| --- | --- | --- |
+| 系统媒体控制（MediaRemote） | 当前 Now Playing 那个应用 | 无 |
+| AppleScript | 脚本字典（`Contents/Resources/*.sdef`）里真的声明了 `pause` / `playpause` 的应用，如 Music、Spotify、VLC、IINA | 首次弹一次「自动化」授权 |
+| 辅助功能（AX） | 其余应用：遍历它的 AX 树，找文案是「暂停 / Pause」的按钮按下去 | 需要「辅助功能」授权 |
+
+判断能否用 AppleScript 是**读 sdef 静态判断**，不靠"发一条试试"——后者会在休息弹出时触发授权弹窗。AX 遍历带节点数（2200）和深度（7）上限，避免 Chrome 这种大树把主线程卡住；只有文案完全匹配「暂停 / pause / 播放暂停」的按钮才会按，避免误点「暂停下载」。
+
+都没有通道的（比如 `afplay` 这种没有界面也没有 bundle 的命令行进程）会如实显示「无法自动暂停」，而不是给一个按了没反应的按钮。
+
+界面上不再是一个「暂停「XXX」」按钮，而是一张音频卡片：每个应用一行（图标 + 名称 + 歌名/歌手 + 单独暂停/恢复），顶部有「全部暂停」。行数超过 4 个时自动压缩行高，超过 6 个时底部提示用「全部暂停」一起处理。休息期间每 5 秒刷新一次，中途开新视频也会列出来。
+
+休息结束时只恢复**被我们暂停过、且现在还停在暂停状态**的那些：Now Playing 那个要求 PID 没变、`isPlaying` 仍为 false；AppleScript / AX 通道的要求该应用当前没有音频输出（说明用户没自己播起来）。
+
+降级链路：`MediaRemote pause` → 校验 `isPlaying == false` → 失败则模拟 `NX_KEYTYPE_PLAY` 媒体键（这条路需要辅助功能授权，所以只做兜底）。
 
 ### 2. 必应每日壁纸
 
@@ -130,8 +153,10 @@ Sources/Rest/
   AppSettings.swift           全部设置项（UserDefaults）+ 空闲检测 + 音效
   Scheduler.swift             工作/休息状态机（槽位计数决定小憩还是休息）
   AudioActivityMonitor.swift  CoreAudio 进程对象枚举
+  MediaSource.swift           音频源模型 + 控制通道类型
+  PerAppMediaControl.swift    AppleScript / 辅助功能 / 媒体键三种单应用控制
   MediaRemoteBridge.swift     MediaRemote 私有框架的 dlsym 封装
-  MediaController.swift       查询 / 暂停 / 恢复，含媒体键兜底
+  MediaController.swift       多音源快照 / 逐个暂停 / 恢复
   WallpaperService.swift      必应壁纸下载与缓存
   BreakViewModel.swift        休息界面状态
   BreakView.swift             SwiftUI 休息界面
@@ -152,5 +177,8 @@ tools/
 ## 已知边界
 
 - `MediaRemote.framework` 是私有 API，随系统版本有变化风险；失效时会自动退化为媒体键模拟。
+- `IsRunningOutput == 1` 只代表"输出流开着"。播放器暂停后常常仍保持这条流（Music、Chrome 都是），所以列表里可能出现在"其实没在播"的应用。这是公开 API 能给到的最准的信息，界面上按「占用音频输出」呈现，点暂停对它也是安全的空操作。
+- 辅助功能授权绑定代码签名：从 `build/` 直接跑、每次重新编译签名都会变，需要重新授权一次。想稳定就把 `Rest.app` 拖进「应用程序」。
+- 第三方应用能否被 AX 控制取决于它自己：原生播放器一般能找到「暂停」按钮，浏览器里的网页播放器要 Chrome 把无障碍树暴露出来才可能命中，命中不了会如实显示「无法自动暂停」。
 - 遮罩捕获到输入时，那一下点击/按键会被吞掉（本来就是"我回来了"的确认动作）。
 - 主要针对单用户本机使用，未做沙盒与公证。

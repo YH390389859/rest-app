@@ -1,124 +1,246 @@
 import Foundation
 import AppKit
 
-/// 当前播放状态快照
-struct PlaybackInfo {
-    var isPlaying: Bool = false
-    var pid: pid_t = 0
-    var bundleID: String?
-    var appName: String?
-    /// 所有正在输出音频的应用（即使媒体处于暂停、流没关闭，也会出现在这里）
-    var audioApps: [AudioApp] = []
-
-    var hasAnything: Bool { isPlaying || !audioApps.isEmpty }
-}
-
+/// 音频源枚举、按应用暂停 / 恢复。
+///
+/// 系统层面只有一个「Now Playing」槽位，多播放器同时出声时 MediaRemote 只认其中一个，
+/// 所以这里以 CoreAudio 的输出进程列表为「有哪些应用在出声」的准绳，再逐个应用
+/// 挑选可用的控制通道（见 `PerAppMediaControl`）。
 @MainActor
 final class MediaController {
     static let shared = MediaController()
-
-    struct PauseResult {
-        let appName: String
-        let bundleID: String?
-        let pid: pid_t
-        /// mediaremote / mediaKey
-        let method: String
-    }
-
     private init() {}
 
-    // MARK: 查询
-
-    func currentPlayback() async -> PlaybackInfo {
-        var info = PlaybackInfo()
-        info.audioApps = AudioActivityMonitor.outputApps()
-
-        let pid = await MediaRemoteBridge.nowPlayingPID()
-        let playing = await MediaRemoteBridge.isPlaying()
-
-        if pid > 0 {
-            info.pid = pid
-            let app = NSRunningApplication(processIdentifier: pid)
-            info.bundleID = app?.bundleIdentifier
-            info.appName = app?.localizedName
-        }
-        if info.appName == nil, let first = info.audioApps.first {
-            info.appName = first.name
-            info.bundleID = first.bundleID
-            info.pid = first.pid
-        }
-        info.isPlaying = playing || (pid == 0 && info.audioApps.count == 1 && MediaRemoteBridge.isAvailable == false)
-
-        // 有 Now Playing 客户端且报告正在播放时，以它为准
-        if pid > 0 { info.isPlaying = playing }
-        return info
+    /// 被我们暂停过的应用，休息结束时用来恢复
+    private struct PausedRecord {
+        let bundleID: String
+        let pid: pid_t
+        let channel: MediaChannel
+        /// AppleScript 用的动词，恢复时取它的反义
+        let verb: String
     }
 
-    // MARK: 暂停 / 恢复
+    private var paused: [String: PausedRecord] = [:]
+    private var scriptableCache: [String: Bool] = [:]
 
-    /// 暂停当前播放中的媒体。
-    /// - Parameter force: true 表示用户手动点击，即使系统说「没在播放」也尝试（有些播放器不注册 Now Playing）
-    func pauseCurrentPlayback(force: Bool = false) async -> PauseResult? {
-        let info = await currentPlayback()
-        guard info.hasAnything else { return nil }
+    func isPaused(_ bundleID: String) -> Bool { paused[bundleID] != nil }
 
-        let name = info.appName ?? "播放器"
-        let bundle = info.bundleID
-        let pid = info.pid
+    // MARK: - 快照
 
-        if info.isPlaying || force {
-            // 方案 A：MediaRemote 精确 pause（不动其它 App、不需要权限）
-            if MediaRemoteBridge.send(.pause) {
-                try? await Task.sleep(nanoseconds: 220_000_000)
-                if !(await MediaRemoteBridge.isPlaying()) {
-                    return PauseResult(appName: name, bundleID: bundle, pid: pid, method: "mediaremote")
+    func snapshot() async -> [MediaSource] {
+        let apps = AudioActivityMonitor.outputApps()
+        let playingPID = await MediaRemoteBridge.nowPlayingPID()
+        let isPlaying = await MediaRemoteBridge.isPlaying()
+
+        var nowBundle: String?
+        var nowPID: pid_t = 0
+        var nowName: String?
+        if playingPID > 0, let app = NSRunningApplication(processIdentifier: playingPID) {
+            nowBundle = Self.normalizedBundle(app.bundleIdentifier)
+            nowPID = playingPID
+            nowName = app.localizedName
+        }
+
+        var sources: [MediaSource] = []
+        var seen = Set<String>()
+
+        for app in apps {
+            let bundle = Self.normalizedBundle(app.bundleID) ?? app.bundleID
+            guard !seen.contains(bundle) else { continue }
+            seen.insert(bundle)
+            let isNow = (bundle == nowBundle)
+            sources.append(MediaSource(bundleID: bundle,
+                                       name: app.name,
+                                       pid: app.pid,
+                                       title: nil,
+                                       isNowPlaying: isNow,
+                                       channel: channel(bundle, isNowPlaying: isNow)))
+        }
+
+        // Now Playing 在播放但没出现在输出列表里（AirPlay、或刚切歌的瞬间），补一条
+        if isPlaying, let bundle = nowBundle, !seen.contains(bundle) {
+            seen.insert(bundle)
+            sources.append(MediaSource(bundleID: bundle,
+                                       name: nowName ?? bundle,
+                                       pid: nowPID,
+                                       title: nil,
+                                       isNowPlaying: true,
+                                       channel: channel(bundle, isNowPlaying: true)))
+        }
+
+        // 标题只有 Now Playing 那个能拿到
+        if let index = sources.firstIndex(where: { $0.isNowPlaying }),
+           let title = await nowPlayingTitle() {
+            sources[index].title = title
+        }
+
+        // Now Playing 排最前，其余按名称
+        return sources.sorted { lhs, rhs in
+            if lhs.isNowPlaying != rhs.isNowPlaying { return lhs.isNowPlaying }
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private func nowPlayingTitle() async -> String? {
+        let info = await MediaRemoteBridge.nowPlayingInfo()
+        func str(_ key: String) -> String? {
+            guard let raw = info[key] as? String else { return nil }
+            let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        }
+        let title = str("kMRMediaRemoteNowPlayingInfoTitle")
+        let artist = str("kMRMediaRemoteNowPlayingInfoArtist")
+        if let title, let artist { return "\(title) · \(artist)" }
+        return title
+    }
+
+    /// Chromium / WebKit 的媒体会话挂在 helper 进程上，归并到主应用
+    private static func normalizedBundle(_ bundle: String?) -> String? {
+        guard let bundle, !bundle.isEmpty else { return nil }
+        if bundle.contains(".helper") {
+            let base = bundle.components(separatedBy: ".helper").first ?? bundle
+            if NSRunningApplication.runningApplications(withBundleIdentifier: base).first != nil {
+                return base
+            }
+        }
+        return bundle
+    }
+
+    // MARK: - 通道判定
+
+    private func channel(_ bundleID: String, isNowPlaying: Bool) -> MediaChannel {
+        if isNowPlaying, MediaRemoteBridge.isAvailable { return .mediaRemote }
+        // 没有 bundle id 的命令行进程（afplay 之类）既没有脚本字典也没有可点的按钮
+        if bundleID.hasPrefix("pid:") { return .none }
+        if isScriptable(bundleID) { return .appleScript }
+        // 剩下的一律尝试辅助功能：没授权时点击会引导去授权，而不是直接判死
+        return .accessibility
+    }
+
+    private func isScriptable(_ bundleID: String) -> Bool {
+        if let cached = scriptableCache[bundleID] { return cached }
+        let verbs = PerAppMediaControl.scriptingVerbs(forBundleID: bundleID)
+        let result = verbs.contains { $0 != "play" }
+        scriptableCache[bundleID] = result
+        return result
+    }
+
+    // MARK: - 暂停
+
+    @discardableResult
+    func pause(_ source: MediaSource) async -> MediaChannel? {
+        switch source.channel {
+        case .mediaRemote:
+            return await pauseNowPlaying(source) ? .mediaRemote : nil
+
+        case .appleScript:
+            let verbs = PerAppMediaControl.scriptingVerbs(forBundleID: source.bundleID)
+            for verb in verbs where verb != "play" {
+                let ok = await PerAppMediaControl.runScriptAsync(
+                    "tell application id \"\(source.bundleID)\" to \(verb)")
+                if ok {
+                    remember(source, channel: .appleScript, verb: verb)
+                    NSLog("Rest: 用 AppleScript(%@) 暂停了 %@", verb, source.name)
+                    return .appleScript
                 }
             }
+            NSLog("Rest: %@ 的脚本通道没成功", source.name)
+            return nil
 
-            // 方案 B：模拟媒体键（部分 App 不响应 MediaRemote 指令）
-            sendPlayPauseKey()
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            if !(await MediaRemoteBridge.isPlaying()) {
-                return PauseResult(appName: name, bundleID: bundle, pid: pid, method: "mediaKey")
+        case .accessibility:
+            guard PerAppMediaControl.accessibilityTrusted else {
+                NSLog("Rest: 未获得辅助功能授权，无法控制 %@", source.name)
+                return nil
+            }
+            let pid = source.pid
+            if await PerAppMediaControl.pressPlayPauseAsync(pid: pid) {
+                remember(source, channel: .accessibility, verb: "pause")
+                NSLog("Rest: 用辅助功能暂停了 %@", source.name)
+                return .accessibility
+            }
+            NSLog("Rest: 在 %@ 里没找到「暂停」按钮", source.name)
+            return nil
+
+        case .none:
+            return nil
+        }
+    }
+
+    private func pauseNowPlaying(_ source: MediaSource) async -> Bool {
+        if MediaRemoteBridge.send(.pause) {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if await MediaRemoteBridge.isPlaying() == false {
+                remember(source, channel: .mediaRemote, verb: "pause")
+                NSLog("Rest: 用系统媒体控制暂停了 %@", source.name)
+                return true
             }
         }
-
-        return nil
+        // 兜底：模拟媒体键（部分播放器不响应 MediaRemote 指令）
+        PerAppMediaControl.postPlayPauseKey()
+        try? await Task.sleep(nanoseconds: 350_000_000)
+        if await MediaRemoteBridge.isPlaying() == false {
+            remember(source, channel: .mediaRemote, verb: "pause")
+            NSLog("Rest: 用媒体键暂停了 %@", source.name)
+            return true
+        }
+        NSLog("Rest: 系统媒体控制没能暂停 %@", source.name)
+        return false
     }
 
-    /// 休息结束后恢复刚才被我们暂停的播放（只在仍是同一个 App、且用户没有自己开始播放时才恢复）
-    func resume(_ result: PauseResult) async {
-        // 用户已经自己播起来了，就别插手
-        if await MediaRemoteBridge.isPlaying() { return }
+    private func remember(_ source: MediaSource, channel: MediaChannel, verb: String) {
+        paused[source.bundleID] = PausedRecord(bundleID: source.bundleID,
+                                               pid: source.pid,
+                                               channel: channel,
+                                               verb: verb)
+    }
 
-        let currentPID = await MediaRemoteBridge.nowPlayingPID()
-        if result.pid > 0, currentPID > 0, currentPID != result.pid { return }
+    // MARK: - 恢复
 
-        if !MediaRemoteBridge.send(.play) {
-            sendPlayPauseKey()
+    func resume(bundleID: String) async {
+        guard let record = paused.removeValue(forKey: bundleID) else { return }
+        await resume(record)
+    }
+
+    func resumeAll() async {
+        let records = Array(paused.values)
+        paused.removeAll()
+        for record in records {
+            await resume(record)
         }
     }
 
-    // MARK: 媒体键兜底
+    func discardPaused() { paused.removeAll() }
 
-    /// 合成一次「播放/暂停」媒体键事件（NX_KEYTYPE_PLAY = 16）。
-    /// 需要「辅助功能」授权，未授权时会被系统静默丢弃，因此只作为兜底。
-    private func sendPlayPauseKey() {
-        func post(isDown: Bool) {
-            let flags: UInt = isDown ? 0xa00 : 0xb00
-            guard let event = NSEvent.otherEvent(with: .systemDefined,
-                                                 location: .zero,
-                                                 modifierFlags: NSEvent.ModifierFlags(rawValue: flags),
-                                                 timestamp: ProcessInfo.processInfo.systemUptime,
-                                                 windowNumber: 0,
-                                                 context: nil,
-                                                 subtype: 8,
-                                                 data1: 16 << 16,
-                                                 data2: -1) else { return }
-            event.cgEvent?.post(tap: .cghidEventTap)
+    private func resume(_ record: PausedRecord) async {
+        switch record.channel {
+        case .mediaRemote:
+            // 用户自己播起来了，或者换了播放器，就别插手
+            if await MediaRemoteBridge.isPlaying() { return }
+            let pid = await MediaRemoteBridge.nowPlayingPID()
+            if pid > 0, pid != record.pid { return }
+            if !MediaRemoteBridge.send(.play) {
+                PerAppMediaControl.postPlayPauseKey()
+            }
+
+        case .appleScript:
+            guard !isOutputting(record.bundleID) else { return }
+            let verb = record.verb == "playpause" ? "playpause" : "play"
+            _ = await PerAppMediaControl.runScriptAsync(
+                "tell application id \"\(record.bundleID)\" to \(verb)")
+
+        case .accessibility:
+            guard !isOutputting(record.bundleID) else { return }
+            _ = await PerAppMediaControl.pressPlayPauseAsync(pid: record.pid)
+
+        case .none:
+            break
         }
-        post(isDown: true)
-        usleep(30_000)
-        post(isDown: false)
+    }
+
+    /// 这个应用现在是否又在输出音频（说明用户已经自己恢复了）
+    private func isOutputting(_ bundleID: String) -> Bool {
+        AudioActivityMonitor.outputApps().contains {
+            $0.bundleID == bundleID || $0.bundleID.hasPrefix(bundleID)
+        }
     }
 }

@@ -19,6 +19,21 @@ struct PillButtonStyle: ButtonStyle {
     }
 }
 
+struct MiniPillButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11.5, weight: .medium))
+            .padding(.horizontal, 11)
+            .padding(.vertical, 4.5)
+            .background(Color.white.opacity(0.14), in: Capsule())
+            .foregroundStyle(.white.opacity(0.95))
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.8))
+            .opacity(configuration.isPressed ? 0.6 : 1)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
 struct BreakView: View {
     @ObservedObject var vm: BreakViewModel
 
@@ -132,16 +147,9 @@ struct BreakView: View {
                 .frame(maxWidth: 460)
                 .shadow(color: .black.opacity(0.35), radius: 8, y: 1)
 
-            mediaBanner
+            audioCard
 
             HStack(spacing: 12) {
-                if vm.hasMediaAction {
-                    Button(vm.busyPausing ? "正在暂停…" : "暂停「\(vm.mediaAppName ?? "")」") {
-                        vm.onPauseMedia?()
-                    }
-                    .buttonStyle(PillButtonStyle(prominent: true))
-                    .disabled(vm.busyPausing)
-                }
                 Button("延后 \(vm.postponeLabel)") { vm.onPostpone?() }
                     .buttonStyle(PillButtonStyle())
                     .opacity(vm.canPostpone ? 1 : 0)
@@ -155,22 +163,173 @@ struct BreakView: View {
         }
     }
 
+    // MARK: 音频卡片
+
     @ViewBuilder
-    private var mediaBanner: some View {
-        if let notice = vm.mediaNotice {
-            Label(notice, systemImage: "speaker.wave.2")
-                .font(.system(size: 13))
-                .foregroundStyle(.white.opacity(0.75))
+    private var audioCard: some View {
+        if !vm.audioRows.isEmpty {
+            VStack(spacing: 0) {
+                HStack(spacing: 7) {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.7))
+                    Text(vm.audioHeading)
+                        .font(.system(size: 11, weight: .medium))
+                        .tracking(0.8)
+                        .foregroundStyle(.white.opacity(0.75))
+                    Spacer(minLength: 16)
+                    if vm.pausableAudioCount > 0 {
+                        Button(vm.audioBusyAll ? "正在暂停…" : "全部暂停") { vm.onPauseAllAudio?() }
+                            .buttonStyle(MiniPillButtonStyle())
+                            .disabled(vm.audioBusyAll)
+                    }
+                }
                 .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(Color.white.opacity(0.1), in: Capsule())
-        } else if vm.mediaPaused, let name = vm.mediaAppName {
-            Label("已暂停「\(name)」的播放", systemImage: "pause.circle")
-                .font(.system(size: 13))
-                .foregroundStyle(.white.opacity(0.75))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(Color.white.opacity(0.1), in: Capsule())
+                .frame(height: 32)
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.1))
+                    .frame(height: 0.5)
+
+                rowsStack
+
+                if let notice = vm.audioNotice {
+                    VStack(spacing: 0) {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.1))
+                            .frame(height: 0.5)
+                        Text(notice)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.white.opacity(0.55))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                    }
+                    .transition(.opacity)
+                }
+            }
+            .frame(maxWidth: 460)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.black.opacity(0.42))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(LinearGradient(colors: [.white.opacity(0.06), .clear],
+                                                 startPoint: .top,
+                                                 endPoint: .center))
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.25), radius: 18, y: 8)
+            .animation(.easeInOut(duration: 0.2), value: vm.audioNotice)
+        }
+    }
+
+    /// 超过 4 个时压缩行高，最多列 6 个，其余在底部说明（「全部暂停」仍会一并处理）
+    private var isCompactAudio: Bool { vm.audioRows.count > 4 }
+    private var audioRowHeight: CGFloat { isCompactAudio ? 32 : 38 }
+    private var visibleAudioRows: [BreakViewModel.AudioRow] { Array(vm.audioRows.prefix(6)) }
+    private var hiddenAudioCount: Int { max(0, vm.audioRows.count - 6) }
+
+    private var rowsStack: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(visibleAudioRows.enumerated()), id: \.element.id) { index, row in
+                audioRow(row)
+                if index < visibleAudioRows.count - 1 {
+                    divider
+                }
+            }
+            if hiddenAudioCount > 0 {
+                divider
+                Text("还有 \(hiddenAudioCount) 个应用，可用「全部暂停」一起处理")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .frame(height: 28)
+            }
+        }
+        .padding(.bottom, 6)
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.08))
+            .frame(height: 0.5)
+            .padding(.leading, 42)
+    }
+
+    private func audioRow(_ row: BreakViewModel.AudioRow) -> some View {
+        HStack(spacing: isCompactAudio ? 9 : 10) {
+            icon(for: row)
+            VStack(alignment: .leading, spacing: isCompactAudio ? 1 : 2) {
+                Text(row.name)
+                    .font(.system(size: isCompactAudio ? 12 : 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(row.paused ? 0.6 : 1))
+                    .lineLimit(1)
+                if let subtitle = row.subtitle {
+                    Text(subtitle)
+                        .font(.system(size: isCompactAudio ? 9.5 : 10.5))
+                        .foregroundStyle(.white.opacity(row.paused ? 0.36 : 0.58))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: 10)
+            audioAction(for: row)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: audioRowHeight)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func icon(for row: BreakViewModel.AudioRow) -> some View {
+        Group {
+            if let image = row.icon {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
+            } else {
+                // 没有图标（应用已退出 / 无法定位）时用首字母占位，比一个空心波形符号清楚
+                ZStack {
+                    RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+                        .fill(Color.white.opacity(0.16))
+                    Text(String(row.name.prefix(1)))
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+            }
+        }
+        .frame(width: isCompactAudio ? 16 : 19, height: isCompactAudio ? 16 : 19)
+        .opacity(row.paused ? 0.55 : 1)
+        .saturation(row.paused ? 0 : 1)
+    }
+
+    @ViewBuilder
+    private func audioAction(for row: BreakViewModel.AudioRow) -> some View {
+        if row.busy {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.55)
+                .frame(width: 46, height: 18)
+        } else if row.paused {
+            HStack(spacing: 7) {
+                Text("已暂停")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.white.opacity(0.6))
+                Button("恢复") { vm.onToggleAudio?(row.id) }
+                    .buttonStyle(MiniPillButtonStyle())
+            }
+        } else if row.channel.isControllable {
+            Button("暂停") { vm.onToggleAudio?(row.id) }
+                .buttonStyle(MiniPillButtonStyle())
+        } else {
+            Text("无法自动暂停")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.white.opacity(0.4))
         }
     }
 

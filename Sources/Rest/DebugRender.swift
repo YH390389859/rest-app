@@ -5,48 +5,94 @@ import SwiftUI
 @MainActor
 enum DebugRender {
     static func run(path: String) {
-        let vm = BreakViewModel()
-        vm.kind = .micro
-        vm.total = 20
-        vm.remaining = 12
-        vm.mode = .running
-        vm.workLabel = "20 分钟"
-        vm.postponeLabel = "5 分钟"
-        vm.mediaAppName = "Google Chrome"
+        let chromeIcon = NSWorkspace.shared.icon(forFile: "/Applications/Google Chrome.app")
+        let musicIcon = NSWorkspace.shared.icon(forFile: "/System/Applications/Music.app")
+
+        func row(_ id: String,
+                 _ name: String,
+                 icon: NSImage?,
+                 subtitle: String?,
+                 nowPlaying: Bool = false,
+                 channel: MediaChannel = .accessibility,
+                 paused: Bool = false) -> BreakViewModel.AudioRow {
+            BreakViewModel.AudioRow(id: id, name: name, icon: icon, subtitle: subtitle,
+                                    isNowPlaying: nowPlaying, channel: channel,
+                                    paused: paused, busy: false)
+        }
 
         Task {
-            if let wallpaper = await WallpaperService.nextWallpaper(market: "zh-CN") {
-                vm.wallpaper = wallpaper.image
-                vm.wallpaperCredit = wallpaper.credit
+            var wallpaper: NSImage?
+            var credit = ""
+            if let w = await WallpaperService.nextWallpaper(market: "zh-CN") {
+                wallpaper = w.image
+                credit = w.credit
             }
-            render(vm: vm, size: CGSize(width: 1440, height: 900), to: path)
 
-            // 第二张：休息结束（等按钮）
+            @MainActor func makeVM(remaining: Double, mode: BreakViewModel.Mode) -> BreakViewModel {
+                let vm = BreakViewModel()
+                vm.kind = .micro
+                vm.total = 20
+                vm.remaining = remaining
+                vm.mode = mode
+                vm.workLabel = "10 分钟"
+                vm.postponeLabel = "5 分钟"
+                vm.wallpaper = wallpaper
+                vm.wallpaperCredit = credit
+                return vm
+            }
+
+            // 1. 多音频源：系统正在播放 + 已暂停 + 需授权
+            let multi = makeVM(remaining: 12, mode: .running)
+            multi.audioRows = [
+                row("com.google.Chrome", "Google Chrome", icon: chromeIcon,
+                    subtitle: "【4K】雪山日出延时 · Nature Relax", nowPlaying: true, channel: .mediaRemote),
+                row("com.netease.163music", "网易云音乐", icon: nil,
+                    subtitle: "晴天 · 周杰伦", channel: .appleScript, paused: true),
+                row("com.apple.Music", "音乐", icon: musicIcon,
+                    subtitle: "需「辅助功能」授权", channel: .accessibility)
+            ]
+            render(vm: multi, size: CGSize(width: 1440, height: 900), to: path)
+
+            // 2. 全部暂停
+            let paused = makeVM(remaining: 8, mode: .running)
+            paused.audioRows = [
+                row("com.google.Chrome", "Google Chrome", icon: chromeIcon,
+                    subtitle: "【4K】雪山日出延时 · Nature Relax", nowPlaying: true,
+                    channel: .mediaRemote, paused: true),
+                row("com.netease.163music", "网易云音乐", icon: nil,
+                    subtitle: "晴天 · 周杰伦", channel: .appleScript, paused: true)
+            ]
+            render(vm: paused, size: CGSize(width: 1440, height: 900),
+                   to: path.replacingOccurrences(of: ".png", with: "-paused.png"))
+
+            // 3. 五个音频源（超过 3 行要能滚动）
+            let many = makeVM(remaining: 15, mode: .running)
+            many.audioRows = [
+                row("a", "Google Chrome", icon: chromeIcon, subtitle: "【4K】雪山日出延时", nowPlaying: true, channel: .mediaRemote),
+                row("b", "网易云音乐", icon: nil, subtitle: "晴天 · 周杰伦", channel: .appleScript),
+                row("c", "音乐", icon: musicIcon, subtitle: nil, channel: .appleScript),
+                row("d", "Spotify", icon: nil, subtitle: "Lofi Beats", channel: .appleScript),
+                row("e", "腾讯会议", icon: nil, subtitle: "需「辅助功能」授权", channel: .accessibility)
+            ]
+            render(vm: many, size: CGSize(width: 1440, height: 900),
+                   to: path.replacingOccurrences(of: ".png", with: "-many.png"))
+
+            // 4. 没有音频源（卡片整块不出现）
+            let silent = makeVM(remaining: 6, mode: .running)
+            render(vm: silent, size: CGSize(width: 1440, height: 900),
+                   to: path.replacingOccurrences(of: ".png", with: "-silent.png"))
+
+            // 5. 休息结束（等按钮）
             let finished = BreakViewModel()
             finished.kind = .long
             finished.total = 300
             finished.remaining = 0
             finished.mode = .finishedManual
-            finished.workLabel = "20 分钟"
-            finished.wallpaper = vm.wallpaper
-            finished.wallpaperCredit = vm.wallpaperCredit
+            finished.workLabel = "10 分钟"
+            finished.wallpaper = wallpaper
+            finished.wallpaperCredit = credit
             render(vm: finished, size: CGSize(width: 1440, height: 900),
                    to: path.replacingOccurrences(of: ".png", with: "-finished.png"))
-
-            // 第三张：已暂停媒体
-            let paused = BreakViewModel()
-            paused.kind = .micro
-            paused.total = 20
-            paused.remaining = 8
-            paused.mode = .running
-            paused.workLabel = "20 分钟"
-            paused.postponeLabel = "5 分钟"
-            paused.mediaAppName = "Google Chrome"
-            paused.mediaPaused = true
-            paused.wallpaper = vm.wallpaper
-            paused.wallpaperCredit = vm.wallpaperCredit
-            render(vm: paused, size: CGSize(width: 1440, height: 900),
-                   to: path.replacingOccurrences(of: ".png", with: "-paused.png"))
 
             NSApp.terminate(nil)
         }

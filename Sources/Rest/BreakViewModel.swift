@@ -18,11 +18,21 @@ final class BreakViewModel: ObservableObject {
     @Published var wallpaper: NSImage?
     @Published var wallpaperCredit: String = ""
 
-    // 媒体相关
-    @Published var mediaAppName: String?
-    @Published var mediaPaused = false
-    @Published var busyPausing = false
-    @Published var mediaNotice: String?
+    // 音频源（休息时可能有多个应用同时在出声）
+    struct AudioRow: Identifiable {
+        let id: String
+        let name: String
+        let icon: NSImage?
+        let subtitle: String?
+        let isNowPlaying: Bool
+        let channel: MediaChannel
+        var paused: Bool
+        var busy: Bool
+    }
+
+    @Published var audioRows: [AudioRow] = []
+    @Published var audioBusyAll = false
+    @Published var audioNotice: String?
 
     @Published var workLabel: String = "约 10 分钟"
     @Published var postponeLabel: String = "5 分钟"
@@ -35,14 +45,23 @@ final class BreakViewModel: ObservableObject {
     var onPostpone: (() -> Void)?
     var onContinue: (() -> Void)?
     var onExtend: (() -> Void)?
-    var onPauseMedia: (() -> Void)?
+    var onToggleAudio: ((String) -> Void)?
+    var onPauseAllAudio: (() -> Void)?
 
     var progress: Double {
         guard total > 0 else { return 0 }
         return min(1, max(0, 1 - remaining / total))
     }
 
-    var hasMediaAction: Bool { mediaAppName != nil && !mediaPaused }
+    var pausedAudioCount: Int { audioRows.filter(\.paused).count }
+
+    /// 还能一键暂停的（已经暂停的、不支持控制的不算）
+    var pausableAudioCount: Int { audioRows.filter { !$0.paused && $0.channel.isControllable }.count }
+
+    var audioHeading: String {
+        if !audioRows.isEmpty, pausedAudioCount == audioRows.count { return "音频 · 已全部暂停" }
+        return "音频 · \(audioRows.count) 个应用"
+    }
 
     var footerHint: String {
         if mode != .running { return "点击按钮或按任意键继续" }

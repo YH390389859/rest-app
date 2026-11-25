@@ -5,6 +5,8 @@ struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     var onPreview: () -> Void = {}
 
+    @State private var mediaAccessTrusted = PerAppMediaControl.accessibilityTrusted
+
     private let markets: [(code: String, name: String)] = [
         ("zh-CN", "中国"),
         ("en-US", "美国"),
@@ -95,13 +97,26 @@ struct SettingsView: View {
                 Toggle("休息开始时自动暂停正在播放的视频 / 音乐", isOn: $settings.autoPauseMedia)
                 Toggle("休息结束后自动恢复播放", isOn: $settings.resumeMediaAfterBreak)
                     .disabled(!settings.autoPauseMedia)
-                Text("检测方式：CoreAudio 进程音频流 + 系统 Now Playing 状态；暂停通过系统媒体控制下发，不需要额外权限。")
+                LabeledContent("辅助功能权限") {
+                    if mediaAccessTrusted {
+                        Label("已授权", systemImage: "checkmark.circle.fill")
+                            .labelStyle(.titleAndIcon)
+                            .foregroundStyle(.green)
+                    } else {
+                        Button("去授权") {
+                            PerAppMediaControl.requestAccessibility()
+                            mediaAccessTrusted = PerAppMediaControl.accessibilityTrusted
+                        }
+                    }
+                }
+                Text("多个播放器同时出声时，会逐个应用暂停：系统正在播放的那个走系统媒体控制（无需权限），其余应用优先用它们自己的 AppleScript 脚本，再退化为辅助功能按下「暂停」按钮。没有辅助功能权限时，列表里仍会显示每个应用，但只能手动暂停。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } header: {
                 Text("视频与音乐")
             }
+            .onAppear { mediaAccessTrusted = PerAppMediaControl.accessibilityTrusted }
 
             Section {
                 Toggle("使用必应每日壁纸作为休息背景", isOn: $settings.useBingWallpaper)
@@ -134,7 +149,7 @@ struct SettingsView: View {
                         }
                     }
                 }
-                Text("只有在极少数播放器不响应系统媒体控制时，才会退化为模拟媒体键，那时需要「辅助功能」授权。")
+                Text("「辅助功能」用于在播放器界面里按下它的暂停按钮；开发版每次重新编译签名会变，需要重新授权一次（装到「应用程序」文件夹后授权更稳定）。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

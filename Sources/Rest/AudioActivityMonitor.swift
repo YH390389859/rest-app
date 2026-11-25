@@ -106,7 +106,10 @@ enum AudioActivityMonitor {
 
             // Chromium / WebKit 的音频跑在 helper 进程里，归并到主应用
             var displayBundle = bundle
-            var displayName = NSRunningApplication(processIdentifier: processID)?.localizedName
+            let runningApp = NSRunningApplication(processIdentifier: processID)
+            var displayName = runningApp?.localizedName
+                ?? runningApp?.executableURL?.lastPathComponent
+                ?? processName(processID)
             if bundle.contains(".helper") {
                 let base = bundle.components(separatedBy: ".helper").first ?? bundle
                 if let parent = NSRunningApplication.runningApplications(withBundleIdentifier: base).first {
@@ -124,6 +127,14 @@ enum AudioActivityMonitor {
         }
 
         return result.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// 命令行进程（afplay 之类）没有 bundle 也没有 localizedName，靠 proc_name 兜底
+    private static func processName(_ processID: pid_t) -> String? {
+        var buffer = [CChar](repeating: 0, count: 1024)
+        let length = proc_name(processID, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return nil }
+        return String(cString: buffer)
     }
 
     /// 是否有应用正在使用音频输出（注意：部分播放器暂停后仍保持输出流，所以这不等价于「正在播放」）
