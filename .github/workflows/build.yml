@@ -59,7 +59,7 @@ jobs:
           mkdir -p dist
           # 非 tag 构建用 commit 短 SHA 命名，避免同名覆盖
           NAME="${GITHUB_REF_NAME//\//-}"
-          if [[ "${GITHUB_REF}" != refs/tags/* ]]; then NAME="${GITHUB_SHA::7}"; fi
+          if [[ "${GITHUB_REF}" != refs/tags/* ]]; then NAME="${GITHUB_SHA::7}"; else NAME="${NAME#v}"; fi
           ditto -c -k --sequesterRsrc --keepParent build/Rest.app "dist/Rest-${NAME}.zip"
           ls -lh dist
 
