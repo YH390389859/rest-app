@@ -54,10 +54,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DebugRender.run(path: CommandLine.arguments[index + 1])
         }
 
-        // 调试用：--render-settings <输出路径> 渲染设置界面
+        // 调试用：--render-settings <输出路径> [高度] 渲染设置界面
         if let index = CommandLine.arguments.firstIndex(of: "--render-settings"),
            CommandLine.arguments.count > index + 1 {
-            DebugRender.renderSettings(path: CommandLine.arguments[index + 1])
+            let height = CommandLine.arguments.count > index + 2
+                ? CGFloat(Double(CommandLine.arguments[index + 2]) ?? 780)
+                : 780
+            DebugRender.renderSettings(path: CommandLine.arguments[index + 1], height: height)
         }
     }
 

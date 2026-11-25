@@ -78,10 +78,32 @@ enum PerAppMediaControl {
 
     static var accessibilityTrusted: Bool { AXIsProcessTrusted() }
 
-    /// 请求辅助功能授权（只在用户主动点击需要它的按钮时调用，会弹系统引导）
+    /// 请求辅助功能授权（只在用户主动点击需要它的按钮时调用）。
+    ///
+    /// 系统那个「是否允许控制这台电脑」的弹窗对同一个应用只会弹一次：用户以前点过
+    /// 拒绝、或者从别的副本点过，再调 `AXIsProcessTrustedWithOptions` 就完全没反应。
+    /// 所以这里除了尝试弹窗，还一定把「系统设置 → 隐私与安全性 → 辅助功能」打开，
+    /// 保证点击后有任何可见反馈。
     static func requestAccessibility() {
+        NSApp.activate(ignoringOtherApps: true)
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
+        let trusted = AXIsProcessTrustedWithOptions(options)
+        NSLog("Rest: 请求辅助功能授权，当前 trusted=%d", trusted ? 1 : 0)
+        openAccessibilitySettings()
+    }
+
+    /// 打开系统设置里的辅助功能授权页。
+    /// 新版 macOS 把隐私面板做成了 ExtensionKit 扩展，旧锚点仍会重定向，
+    /// 但先试新标识、失败再退回旧的更稳。
+    static func openAccessibilitySettings() {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        ]
+        for raw in candidates {
+            if let url = URL(string: raw), NSWorkspace.shared.open(url) { return }
+        }
+        NSLog("Rest: 打开辅助功能设置页失败")
     }
 
     /// 在目标应用里找「暂停」按钮并按下去。阻塞式，调用方放到后台线程。

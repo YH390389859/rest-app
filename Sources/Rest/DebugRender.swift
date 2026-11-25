@@ -106,9 +106,9 @@ enum DebugRender {
     /// 把设置界面渲染成 PNG（检查排版用）。
     /// Form 是 AppKit 支撑的视图，ImageRenderer 渲不出内容，所以走窗口的 cacheDisplay——
     /// 这是画自己窗口的内容，不需要录屏权限。
-    static func renderSettings(path: String) {
+    static func renderSettings(path: String, height: CGFloat = 780) {
         let hosting = NSHostingView(rootView: SettingsView(settings: AppSettings.shared))
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 780),
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: height),
                            styleMask: [.titled, .closable],
                            backing: .buffered,
                            defer: false)
@@ -117,6 +117,13 @@ enum DebugRender {
         hosting.layoutSubtreeIfNeeded()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            if ProcessInfo.processInfo.environment["REST_SCROLL_BOTTOM"] != nil,
+               let scroll = Self.firstScrollView(in: hosting) {
+                let maxY = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.height)
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: maxY))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                hosting.layoutSubtreeIfNeeded()
+            }
             if let view = win.contentView,
                let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
                 view.cacheDisplay(in: view.bounds, to: rep)
@@ -127,6 +134,14 @@ enum DebugRender {
             }
             NSApp.terminate(nil)
         }
+    }
+
+    private static func firstScrollView(in view: NSView) -> NSScrollView? {
+        if let scroll = view as? NSScrollView { return scroll }
+        for sub in view.subviews {
+            if let found = firstScrollView(in: sub) { return found }
+        }
+        return nil
     }
 
     private static func write<V: View>(_ view: V, scale: CGFloat, to path: String) {

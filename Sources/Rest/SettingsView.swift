@@ -6,6 +6,31 @@ struct SettingsView: View {
     var onPreview: () -> Void = {}
 
     @State private var mediaAccessTrusted = PerAppMediaControl.accessibilityTrusted
+    @State private var mediaAuthHint: String?
+    @State private var authPollTask: Task<Void, Never>?
+
+    /// 点「去授权」：弹系统引导（可能已经被系统吞掉）+ 一定打开设置面板，然后轮询授权状态
+    private func requestMediaAccess() {
+        PerAppMediaControl.requestAccessibility()
+        mediaAuthHint = "已打开「系统设置 → 隐私与安全性 → 辅助功能」，在列表里把 Rest 勾上（没有这一项就点「+」添加 build/Rest.app）。授权后这里会自动变成「已授权」。"
+        startAuthPolling()
+    }
+
+    /// 系统设置是另一个进程，勾选后不会通知我们，只能轮询
+    private func startAuthPolling() {
+        authPollTask?.cancel()
+        authPollTask = Task {
+            for _ in 0..<180 {
+                if Task.isCancelled { return }
+                if PerAppMediaControl.accessibilityTrusted {
+                    mediaAccessTrusted = true
+                    mediaAuthHint = "已获得辅助功能权限，Chrome / Safari 这类应用的「暂停」按钮现在可以自动按了。"
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
 
     private let markets: [(code: String, name: String)] = [
         ("zh-CN", "中国"),
@@ -98,25 +123,39 @@ struct SettingsView: View {
                 Toggle("休息结束后自动恢复播放", isOn: $settings.resumeMediaAfterBreak)
                     .disabled(!settings.autoPauseMedia)
                 LabeledContent("辅助功能权限") {
-                    if mediaAccessTrusted {
-                        Label("已授权", systemImage: "checkmark.circle.fill")
-                            .labelStyle(.titleAndIcon)
-                            .foregroundStyle(.green)
-                    } else {
-                        Button("去授权") {
-                            PerAppMediaControl.requestAccessibility()
-                            mediaAccessTrusted = PerAppMediaControl.accessibilityTrusted
+                    HStack(spacing: 8) {
+                        if mediaAccessTrusted {
+                            Label("已授权", systemImage: "checkmark.circle.fill")
+                                .labelStyle(.titleAndIcon)
+                                .foregroundStyle(.green)
+                        } else {
+                            Button("去授权") { requestMediaAccess() }
+                            Button("重新检测") { mediaAccessTrusted = PerAppMediaControl.accessibilityTrusted }
                         }
                     }
                 }
+                if let mediaAuthHint {
+                    Text(mediaAuthHint)
+                        .font(.caption)
+                        .foregroundStyle(mediaAccessTrusted ? Color.green : Color.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Text("多个播放器同时出声时，会逐个应用暂停：系统正在播放的那个走系统媒体控制（无需权限），其余应用优先用它们自己的 AppleScript 脚本，再退化为辅助功能按下「暂停」按钮。没有辅助功能权限时，列表里仍会显示每个应用，但只能手动暂停。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("注意：本地打包的应用是 ad-hoc 签名，重新编译后签名会变，系统会把旧授权作废。建议把 build/Rest.app 拖到「应用程序」里再用；如果列表里的 Rest 已勾选但这里仍显示未授权，点「−」删掉再重新添加。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } header: {
                 Text("视频与音乐")
             }
-            .onAppear { mediaAccessTrusted = PerAppMediaControl.accessibilityTrusted }
+            .onAppear {
+                mediaAccessTrusted = PerAppMediaControl.accessibilityTrusted
+                if !mediaAccessTrusted { startAuthPolling() }
+            }
+            .onDisappear { authPollTask?.cancel() }
 
             Section {
                 Toggle("使用必应每日壁纸作为休息背景", isOn: $settings.useBingWallpaper)
@@ -143,11 +182,7 @@ struct SettingsView: View {
                 HStack {
                     Button("预览休息界面") { onPreview() }
                     Spacer()
-                    Button("打开辅助功能设置") {
-                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
+                    Button("打开辅助功能设置") { PerAppMediaControl.openAccessibilitySettings() }
                 }
                 Text("「辅助功能」用于在播放器界面里按下它的暂停按钮；开发版每次重新编译签名会变，需要重新授权一次（装到「应用程序」文件夹后授权更稳定）。")
                     .font(.caption)
