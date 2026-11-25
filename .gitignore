@@ -1,0 +1,15 @@
+# SwiftPM 构建产物
+.build/
+.swiftpm/
+build/
+
+# macOS
+.DS_Store
+
+# Xcode
+*.xcodeproj/xcuserdata/
+*.xcuserstate
+DerivedData/
+
+# 本地工具数据
+.workbuddy/
