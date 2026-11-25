@@ -330,17 +330,10 @@ struct BreakView: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.white.opacity(0.38))
         } else {
-            HStack(spacing: 6) {
-                if row.canNext {
-                    circleControl("forward.end.fill", size: 10,
-                                  help: "下一首") { vm.onNextAudio?(row.id) }
-                        .opacity(row.paused ? 0.5 : 0.72)
-                }
-                circleControl(row.paused ? "play.fill" : "pause.fill",
-                              size: 11,
-                              help: row.paused ? "恢复播放" : "暂停") {
-                    vm.onToggleAudio?(row.id)
-                }
+            circleControl(row.paused ? "play.fill" : "pause.fill",
+                          size: 11,
+                          help: row.paused ? "恢复播放" : "暂停") {
+                vm.onToggleAudio?(row.id)
             }
         }
     }

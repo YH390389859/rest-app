@@ -46,12 +46,6 @@ enum PerAppMediaControl {
         return verbs
     }
 
-    /// 脚本字典里是否声明了「下一首」（Music / Spotify 都是 `next track`）
-    static func hasNextTrackCommand(forBundleID bundleID: String) -> Bool {
-        guard let text = sdefText(forBundleID: bundleID) else { return false }
-        return text.contains("name=\"next track\"") || text.contains("name=\"nextTrack\"")
-    }
-
     /// 把应用 Resources 目录下所有 .sdef 拼成一段文本（纯文件读取，无副作用）
     private static func sdefText(forBundleID bundleID: String) -> String? {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return nil }

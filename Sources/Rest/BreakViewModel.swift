@@ -29,7 +29,6 @@ final class BreakViewModel: ObservableObject {
         let icon: NSImage?
         let isNowPlaying: Bool
         let channel: MediaChannel
-        let canNext: Bool
         var paused: Bool
         var busy: Bool
     }
@@ -50,7 +49,6 @@ final class BreakViewModel: ObservableObject {
     var onContinue: (() -> Void)?
     var onExtend: (() -> Void)?
     var onToggleAudio: ((String) -> Void)?
-    var onNextAudio: ((String) -> Void)?
     var onPauseAllAudio: (() -> Void)?
 
     var progress: Double {

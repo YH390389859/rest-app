@@ -35,8 +35,6 @@ struct MediaSource: Identifiable {
     var album: String?
     var isBrowser = false
     var isMusic = false
-    /// 是否支持「下一首」
-    var canNext = false
 
     var id: String { bundleID }
 

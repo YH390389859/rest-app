@@ -61,7 +61,6 @@ final class BreakCoordinator {
             self?.vm.mode = .running
         }
         vm.onToggleAudio = { [weak self] id in self?.toggleAudio(id) }
-        vm.onNextAudio = { [weak self] id in self?.nextAudio(id) }
         vm.onPauseAllAudio = { [weak self] in
             Task { await self?.pauseAllAudio() }
         }
@@ -227,7 +226,6 @@ final class BreakCoordinator {
                                     icon: source.icon(),
                                     isNowPlaying: source.isNowPlaying,
                                     channel: source.channel,
-                                    canNext: source.canNext,
                                     paused: media.isPaused(source.bundleID),
                                     busy: busyAudioIDs.contains(source.bundleID))
         }
@@ -242,17 +240,6 @@ final class BreakCoordinator {
             return "需「辅助功能」授权"
         }
         return "正在播放"
-    }
-
-    private func nextAudio(_ id: String) {
-        guard let source = sources.first(where: { $0.bundleID == id }) else { return }
-        Task { [weak self] in
-            await self?.media.next(source)
-            // 切歌后封面/歌名会变，立刻刷新一次
-            try? await Task.sleep(nanoseconds: 600_000_000)
-            guard let self, self.scheduler.currentKind != nil else { return }
-            await self.refreshAudio(pausePlaying: false)
-        }
     }
 
     private func toggleAudio(_ id: String) {

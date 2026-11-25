@@ -79,10 +79,6 @@ final class MediaController {
             }
         }
 
-        for index in sources.indices {
-            sources[index].canNext = canNext(sources[index])
-        }
-
         // Now Playing 排最前，其余按名称
         return sources.sorted { lhs, rhs in
             if lhs.isNowPlaying != rhs.isNowPlaying { return lhs.isNowPlaying }
@@ -95,12 +91,6 @@ final class MediaController {
         if let artist = meta.artist { source.artist = artist }
         if let album = meta.album { source.album = album }
         if meta.isMusic { source.isMusic = true }
-    }
-
-    /// 「下一首」只给确认是音乐内容、且确实有这条指令的应用，避免给网页视频配一个点了没反应的按钮
-    private func canNext(_ source: MediaSource) -> Bool {
-        if source.channel == .mediaRemote, source.isMusic, MediaRemoteBridge.isAvailable { return true }
-        return PerAppMediaControl.hasNextTrackCommand(forBundleID: source.bundleID)
     }
 
     /// Chromium / WebKit 的媒体会话挂在 helper 进程上，归并到主应用
@@ -209,21 +199,6 @@ final class MediaController {
                                                pid: source.pid,
                                                channel: channel,
                                                verb: verb)
-    }
-
-    // MARK: - 下一首
-
-    /// 只在界面确认 `canNext` 后调用：Now Playing 走系统指令，其余走脚本字典
-    func next(_ source: MediaSource) async {
-        if source.channel == .mediaRemote, MediaRemoteBridge.isAvailable,
-           MediaRemoteBridge.send(.nextTrack) {
-            NSLog("Rest: 用系统媒体控制让 %@ 切到下一首", source.name)
-            return
-        }
-        guard PerAppMediaControl.hasNextTrackCommand(forBundleID: source.bundleID) else { return }
-        _ = await PerAppMediaControl.runScriptAsync(
-            "tell application id \"\(source.bundleID)\" to next track")
-        NSLog("Rest: 用 AppleScript 让 %@ 切到下一首", source.name)
     }
 
     // MARK: - 恢复

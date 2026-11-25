@@ -14,11 +14,10 @@ enum DebugRender {
                  icon: NSImage?,
                  nowPlaying: Bool = false,
                  channel: MediaChannel = .accessibility,
-                 canNext: Bool = false,
                  paused: Bool = false) -> BreakViewModel.AudioRow {
             BreakViewModel.AudioRow(id: id, title: title, detail: detail,
                                     icon: icon, isNowPlaying: nowPlaying, channel: channel,
-                                    canNext: canNext, paused: paused, busy: false)
+                                    paused: paused, busy: false)
         }
 
         Task {
@@ -47,11 +46,11 @@ enum DebugRender {
             multi.audioRows = [
                 row("com.apple.Music", "Where You Taking My Baby?", detail: "BC Camplight · A Sober Conversation",
                     icon: musicIcon, nowPlaying: true,
-                    channel: .mediaRemote, canNext: true),
+                    channel: .mediaRemote),
                 row("com.google.Chrome", "Harvard CS50's Introduction to Computer Science", detail: "freeCodeCamp.org",
                     icon: chromeIcon, channel: .mediaRemote),
                 row("com.netease.163music", "晴天", detail: "周杰伦 · 叶惠美",
-                    icon: nil, channel: .appleScript, canNext: true, paused: true)
+                    icon: nil, channel: .appleScript, paused: true)
             ]
             render(vm: multi, size: CGSize(width: 1440, height: 900), to: path)
 
@@ -60,7 +59,7 @@ enum DebugRender {
             paused.audioRows = [
                 row("com.apple.Music", "Where You Taking My Baby?", detail: "BC Camplight · A Sober Conversation",
                     icon: musicIcon, nowPlaying: true,
-                    channel: .mediaRemote, canNext: true, paused: true),
+                    channel: .mediaRemote, paused: true),
                 row("com.google.Chrome", "Harvard CS50's Introduction to Computer Science", detail: "freeCodeCamp.org",
                     icon: chromeIcon, channel: .mediaRemote, paused: true)
             ]
@@ -71,11 +70,11 @@ enum DebugRender {
             let many = makeVM(remaining: 15, mode: .running)
             many.audioRows = [
                 row("a", "Where You Taking My Baby?", detail: "BC Camplight · A Sober Conversation",
-                    icon: musicIcon, nowPlaying: true, channel: .mediaRemote, canNext: true),
+                    icon: musicIcon, nowPlaying: true, channel: .mediaRemote),
                 row("b", "Harvard CS50's Introduction", detail: "freeCodeCamp.org",
                     icon: chromeIcon, channel: .mediaRemote),
-                row("c", "晴天", detail: "周杰伦 · 叶惠美", icon: nil, channel: .appleScript, canNext: true),
-                row("d", "Lofi Beats to Relax", detail: "Spotify", icon: nil, channel: .appleScript, canNext: true),
+                row("c", "晴天", detail: "周杰伦 · 叶惠美", icon: nil, channel: .appleScript),
+                row("d", "Lofi Beats to Relax", detail: "Spotify", icon: nil, channel: .appleScript),
                 row("e", "腾讯会议", detail: "需「辅助功能」授权", icon: nil, channel: .accessibility)
             ]
             render(vm: many, size: CGSize(width: 1440, height: 900),
@@ -125,7 +124,7 @@ enum DebugRender {
             log("共 \(sources.count) 个音频源")
             for source in sources {
                 log("\(source.bundleID) | \(source.displayTitle) | \(source.displayDetail ?? "-") "
-                    + "| 渠道:\(source.channel.rawValue) | 下一首:\(source.canNext ? 1 : 0) "
+                    + "| 渠道:\(source.channel.rawValue) "
                     + "| 浏览器:\(source.isBrowser ? 1 : 0) | 音乐:\(source.isMusic ? 1 : 0)")
             }
             try? lines.joined(separator: "\n").write(toFile: "/tmp/rest-dump.txt",
