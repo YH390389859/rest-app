@@ -4,6 +4,8 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>Rest</string>
 	<key>CFBundleExecutable</key>
 	<string>Rest</string>
 	<key>CFBundleIconFile</key>
@@ -14,27 +16,25 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>Rest</string>
-	<key>CFBundleDisplayName</key>
-	<string>Rest</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.3</string>
+	<string>1.0.4</string>
 	<key>CFBundleVersion</key>
-	<string>3</string>
+	<string>4</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
-	<true/>
-	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>休息开始时用于暂停正在播放的视频或音乐。</string>
 	<key>NSAppleMusicUsageDescription</key>
 	<string>用于在休息界面显示当前在播的歌名与歌手。</string>
-	<key>NSMediaLibraryUsageDescription</key>
-	<string>用于在休息界面显示当前在播的歌名与歌手。</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Personal build, inspired by Stretchly.</string>
+	<key>NSMediaLibraryUsageDescription</key>
+	<string>用于在休息界面显示当前在播的歌名与歌手。</string>
 </dict>
 </plist>
