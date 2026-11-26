@@ -51,9 +51,52 @@ cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
-# 本地自签名，确保 TCC（辅助功能/自动化）能稳定记住授权
-codesign --force --sign - --identifier com.yanghui.rest "$APP" >/dev/null 2>&1 || \
-  echo "!! codesign 失败（可忽略，仅影响权限记忆）"
+# --- 代码签名 ---
+# 有固定证书就用它签：TCC 按「bundle id + 证书指纹」记授权，重装/升级都不掉权限。
+# 没有证书才退回 ad-hoc——那样每次重新编译 cdhash 都变，授权会反复失效。
+LOCAL_KEYCHAIN="$HOME/Library/Keychains/rest-signing.keychain-db"
+SIGN_ID="${CODESIGN_IDENTITY:-}"
+SIGN_KEYCHAIN="${CODESIGN_KEYCHAIN:-}"
+
+if [ -z "$SIGN_ID" ] && [ -f "$LOCAL_KEYCHAIN" ] \
+  && security find-identity -p codesigning "$LOCAL_KEYCHAIN" 2>/dev/null | grep -q "Rest Self Signed"; then
+  # 本地：证书在我们的独立钥匙串里，必须显式 --keychain，否则会去登录钥匙串里找不到/被拦
+  SIGN_ID="Rest Self Signed"
+  SIGN_KEYCHAIN="$LOCAL_KEYCHAIN"
+fi
+if [ -z "$SIGN_ID" ] \
+  && security find-identity -p codesigning 2>/dev/null | grep -q "Rest Self Signed"; then
+  # CI：临时钥匙串已经加进搜索列表，不用指定路径
+  SIGN_ID="Rest Self Signed"
+fi
+
+sign_app() {
+  local target="$1"
+  local kc_args=()
+  if [ -n "$SIGN_KEYCHAIN" ]; then
+    kc_args=(--keychain "$SIGN_KEYCHAIN")
+  fi
+  if [ -n "$SIGN_ID" ]; then
+    # 不要加 --options runtime：hardened runtime 会禁止 App 发 Apple Event，
+    # 而暂停播放正是靠 osascript 发出去的。runtime 只有公证才需要。
+    if codesign --force --identifier com.yanghui.rest \
+      --sign "$SIGN_ID" ${kc_args[@]+"${kc_args[@]}"} "$target" 2>/dev/null; then
+      return 0
+    fi
+    echo "!! 用「$SIGN_ID」签名失败，退回 ad-hoc"
+    SIGN_ID=""
+  fi
+  codesign --force --sign - --identifier com.yanghui.rest "$target" >/dev/null 2>&1 || \
+    echo "!! codesign 失败（可忽略，仅影响权限记忆）"
+}
+
+if [ -n "$SIGN_ID" ]; then
+  echo "==> 签名身份: $SIGN_ID"
+else
+  echo "==> 签名身份: ad-hoc（跑 tools/make-signing-cert.sh 可换成固定证书）"
+fi
+sign_app "$APP"
+codesign -dv --verbose=2 "$APP" 2>&1 | grep -E "^(Identifier|Authority|Signature)" | sed 's/^/    /' || true
 
 echo "==> 完成: $APP"
 
@@ -81,8 +124,9 @@ if [ "$INSTALL" = "1" ]; then
       echo "!! $DEST 已存在且不是 com.yanghui.rest，停止安装"; exit 1
     fi
   fi
-  cp -R "$APP" "$DEST"
-  codesign --force --sign - --identifier com.yanghui.rest "$DEST" >/dev/null 2>&1 || true
+  # ditto 比 cp -R 更能保住 xattr，签名不会因为复制而损坏
+  ditto "$APP" "$DEST"
+  sign_app "$DEST"
   open "$DEST"
   echo "==> 已启动 $DEST"
 fi

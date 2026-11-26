@@ -23,7 +23,35 @@ open build/Rest.app                 # 直接运行（或拖到 /Applications）
 
 DMG 里就是 `Rest.app` + 一个指向 `/Applications` 的快捷方式，双击挂载后拖过去即可。嫌不够好看可以自己加背景图和图标位置，但那样得靠 Finder 摆（CI 里没有 Finder 会话，AppleScript 会失败），所以这里保持纯 `hdiutil`、无脚本依赖。
 
-要求 macOS 14+、Xcode 命令行工具。打包是 ad-hoc 签名；"登录时自动启动"需要把 App 放到 `/Applications` 才能真正生效。
+要求 macOS 14+、Xcode 命令行工具。签名默认走**本地自签名证书**（见下节），没配证书时退回 ad-hoc；"登录时自动启动"需要把 App 放到 `/Applications` 才能真正生效。
+
+### 代码签名
+
+`codesign -s -`（ad-hoc）没有身份，TCC 只能按 cdhash 记授权——每次重新编译 cdhash 都变，于是「辅助功能 / 自动化」反复失效，系统设置里还会堆出一串 `Rest 23-30-19-781` 这种带时间戳的条目。
+
+换成一张固定证书后，TCC 改按 `identifier + 证书指纹` 识别（`codesign -d -r-` 能看到 `designated => identifier "com.yanghui.rest" and certificate root = H"..."`），**重装、升级、重新编译都不掉权限**：
+
+```bash
+tools/make-signing-cert.sh          # 生成 10 年期自签名证书 + 独立钥匙串（幂等）
+./build.sh release --install        # 之后构建自动用这张证书签
+```
+
+脚本做三件事，缺一件就会被钥匙串弹窗卡住：
+
+1. `openssl` 出一张带 `extendedKeyUsage=codeSigning` 的自签名证书（不带这个 EKU，`codesign` 根本认不出这是签名身份）；
+2. 建**独立钥匙串** `~/Library/Keychains/rest-signing.keychain-db`（导进登录钥匙串的话，每次取私钥都会被访问控制拦一次）；
+3. `security set-key-partition-list -S apple-tool:,apple:,codesign:` 放行 `codesign`，再加一步真签名自检。
+
+签的时候**不加 `--options runtime`**：hardened runtime 会禁止 App 发送 Apple Event，而暂停播放正是靠 `osascript` 发出去的，开了 runtime 反而把功能签死（runtime 只有公证才需要）。
+
+CI 里是可选的：没有 `SIGNING_P12` secret 就退回 ad-hoc，有就用它签并断言产物 `Authority=Rest Self Signed`，避免哪天悄悄退回 ad-hoc。
+
+```bash
+base64 -i certs/rest-signing.p12 | pbcopy   # → secret SIGNING_P12
+                                            # → secret SIGNING_P12_PASS = rest-signing
+```
+
+注意这只解决「本机权限稳定」，**不解决别人的 Gatekeeper**——自签名证书没有 Apple 根信任，陌生用户装了照样要手动放行。要彻底消掉「无法验证开发者」只能上付费开发者账号（Developer ID + 公证）。
 
 ### 自动打包
 
@@ -135,7 +163,7 @@ Chromium / WebKit 的音频跑在 helper 进程里，代码里会把 `com.google
 
 两级来源：**系统 Now Playing 槽位**（MediaRemote，无需授权；浏览器会把网页的 Media Session 发布到同一个槽位，所以能拿到「哪个页签在响」）和 **AppleScript**（`current track` / `current item`）。后者只在**已经授权「自动化」**时才读——用 `AEDeterminePermissionToAutomateTarget(askUserIfNeeded: false)` 静默探测，没授权就跳过，不会在休息遮罩弹出来的时候弹系统窗口。
 
-> ⚠️ **已知限制**：macOS 27 上 MediaRemote 的读取对 ad-hoc 签名的构建返回空——同一段代码用 Xcode 自带的 `swift-frontend` 跑能拿到完整字典（33 个键），换成自己编译的二进制（ad-hoc 签名）就只剩空字典。所以从源码 ad-hoc 构建的版本在浏览器上通常只能显示「网页音频」，音乐则依赖「自动化」授权后的 AppleScript。换成稳定证书（Developer ID 或本地自签名）签名后值得再验证一次。
+> ⚠️ **已知限制**：macOS 27 上 MediaRemote 的读取对非 Apple 签名的构建返回空——同一段代码用 Xcode 自带的 `swift-frontend` 跑能拿到完整字典（33 个键），换成自己编译的二进制就只剩空字典。换成固定自签名证书后行为还没复测，推测仍然不行：Apple 检查的应该是「有没有 Apple 签发的身份」，而不只是「cdhash 稳不稳定」。所以从源码构建的版本在浏览器上通常只能显示「网页音频」，音乐则依赖「自动化」授权后的 AppleScript。
 
 休息结束时只恢复**被我们暂停过、且现在还停在暂停状态**的那些：Now Playing 那个要求 PID 没变、`isPlaying` 仍为 false；AppleScript / AX 通道的要求该应用当前没有音频输出（说明用户没自己播起来）。
 
@@ -149,7 +177,7 @@ Chromium / WebKit 的音频跑在 helper 进程里，代码里会把 `com.google
 
 所以「去授权」现在做三件事：先尝试弹系统窗，然后**无条件打开系统设置**的辅助功能页，再每秒轮询一次授权状态——你在列表里勾上 Rest，这边会自动变成「已授权」；旁边还留了个「重新检测」手动兜底。
 
-本地打包是 ad-hoc 签名，`codesign` 的哈希每次编译都会变，TCC 会认为换了应用、旧授权作废。想少折腾就 `./build.sh release --install` 装到 `/Applications/Rest.app`（脚本会校验 bundle id 再覆盖），位置固定后只需要在列表里重新勾一次。
+本地打包现在用固定证书签名（`tools/make-signing-cert.sh` 生成），TCC 按「bundle id + 证书指纹」记授权，重新编译、升级版本都不会再失效。装到 `/Applications/Rest.app` 后只需要在列表里勾一次，之后一直有效。没跑过那个脚本的机器仍然是 ad-hoc，哈希每次编译都变，旧授权会作废。
 
 ### 2. 必应每日壁纸
 
@@ -206,6 +234,8 @@ Sources/Rest/
 
 tools/
   make-icon.swift             生成 AppIcon.icns
+  make-signing-cert.sh        生成本地自签名证书 + 签名钥匙串
+  make-dmg.sh                 把 Rest.app 打成 DMG
 ```
 
 计时用「目标时间戳」而不是自增计数器，睡眠唤醒后不会漂移。空闲超过 2 分钟会跳过这次休息（可在设置里关掉）。
@@ -216,7 +246,7 @@ tools/
 
 - `MediaRemote.framework` 是私有 API，随系统版本有变化风险；失效时会自动退化为媒体键模拟。
 - `IsRunningOutput == 1` 只代表"输出流开着"。播放器暂停后常常仍保持这条流（Music、Chrome 都是），所以列表里可能出现在"其实没在播"的应用。这是公开 API 能给到的最准的信息，界面上按「占用音频输出」呈现，点暂停对它也是安全的空操作。
-- 辅助功能授权绑定代码签名：从 `build/` 直接跑、每次重新编译签名都会变，需要重新授权一次。想稳定就把 `Rest.app` 拖进「应用程序」。
+- 辅助功能授权绑定代码签名。现在用固定自签名证书（`tools/make-signing-cert.sh`），编译多少次都还是同一个身份，不用反复授权；但**换机器、删了 `rest-signing.keychain-db`** 就等于换了身份，得重新勾一次。
 - 第三方应用能否被 AX 控制取决于它自己：原生播放器一般能找到「暂停」按钮，浏览器里的网页播放器要 Chrome 把无障碍树暴露出来才可能命中，命中不了会如实显示「无法自动暂停」。
 - 遮罩捕获到输入时，那一下点击/按键会被吞掉（本来就是"我回来了"的确认动作）。
 - 主要针对单用户本机使用，未做沙盒与公证。

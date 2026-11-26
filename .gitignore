@@ -14,3 +14,7 @@ DerivedData/
 
 # 本地工具数据
 .workbuddy/
+
+# 签名证书与私钥（只能进 GitHub secret，绝不能提交）
+certs/
+*.p12
