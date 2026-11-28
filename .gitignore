@@ -14,6 +14,9 @@ DerivedData/
 windows/**/bin/
 windows/**/obj/
 windows/dist/
+# 送签的中间件：待签名包与签名回来的结果
+windows/signin/
+windows/signed/
 *.user
 *.suo
 

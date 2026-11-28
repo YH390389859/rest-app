@@ -33,6 +33,8 @@
 ```
 rest-app/
 ├── VERSION                     # 唯一版本号来源，两个平台构建时都读它
+├── LICENSE                     # MIT
+├── CODE-SIGNING-POLICY.md      # 签名规则（也是申请免费签名服务要交的材料）
 ├── macos/                      # Swift Package + 打包脚本
 │   ├── Package.swift
 │   ├── Sources/Rest/           # 18 个 Swift 文件
@@ -47,8 +49,9 @@ rest-app/
 │   ├── src/Rest.App/           # WPF 界面
 │   ├── tests/Rest.Core.Tests/  # 22 个节奏模型用例
 │   ├── installer/Rest.iss      # Inno Setup 安装器
-│   ├── build.ps1               # 编译 + 测试 + 便携包 + 安装器
+│   ├── build.ps1               # 编译 + 测试 + 便携包 + 安装器（含两遍签名流程）
 │   └── README.md               # Windows 侧技术细节
+├── .signpath/                  # 远程签名用的 artifact configuration
 └── .github/workflows/build.yml # 一条流水线出两个平台的包
 ```
 
@@ -93,11 +96,19 @@ CI（`.github/workflows/build.yml`）的三个 job：
 | 平台 | 现在 | 用户侧表现 | 彻底解决 |
 | --- | --- | --- | --- |
 | macOS | 本地自签名证书（CI 用 `SIGNING_P12` secret，没有则 ad-hoc） | 首次打开需在「隐私与安全性」放行；TCC 授权不再随编译失效 | Apple Developer ID + 公证 |
-| Windows | 未签名（CI 已接好 `WINDOWS_SIGN_PFX_BASE64` / `WINDOWS_SIGN_PFX_PASS`，配了就自动签） | SmartScreen 提示；SAC 开启时直接拦截（**安装器也一样被拦**） | 受信任代码签名证书 |
+| Windows | 准备接入 SignPath Foundation（开源免费）；也可用 `WINDOWS_SIGN_PFX_BASE64` 走自己的证书 | 未签状态：SmartScreen 提示，SAC 开启时直接拦截（**安装器也一样被拦**） | 受信任 CA 的代码签名证书 |
 
 SAC（智能应用控制）拦的是 PE 镜像加载，和有没有安装器无关：本机（SAC=Enforce）实测运行未签名的
 `setup.exe` 会直接报「应用程序控制策略已阻止此文件」。所以「做个安装器」只解决了安装体验，
-没有解决拦截；那条只能靠证书。
+没解决拦截；那条只能靠受信任证书。
+
+**免费的路子是有的**：SAC 认的是「证书是否来自微软受信任根计划内的 CA」，不看下载量，
+所以开源项目可以申请 [SignPath Foundation](https://signpath.org/) 的免费签名（Sectigo 签发），
+签一次就过。仓库已经按这个模型把 CI 和打包脚本改好了，审核下来填 3 个变量 + 1 个 secret 即可；
+细节和「卸载器同样要签，否则能装不能卸」这条坑见 [windows/README.md](windows/README.md#签名通道)。
+
+签名策略（提供给签名服务的说明）：[CODE-SIGNING-POLICY.md](CODE-SIGNING-POLICY.md)。
+
 
 ## 更多
 

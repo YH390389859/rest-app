@@ -16,6 +16,8 @@ on:
 
 permissions:
   contents: write
+  # SignPath 的 action 要用 GITHUB_TOKEN 把本次运行的 artifact 下载下来送签
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -199,9 +201,17 @@ jobs:
       run:
         working-directory: windows
     env:
-      # 配了证书就签 Rest.exe 和 setup.exe；两个 secret 都为空时构建脚本直接跳过
+      VERSION: ${{ needs.version.outputs.version }}
+      # 本地 PFX 签名通道（买了证书就走这条）
       WINDOWS_SIGN_PFX_BASE64: ${{ secrets.WINDOWS_SIGN_PFX_BASE64 }}
       WINDOWS_SIGN_PFX_PASS: ${{ secrets.WINDOWS_SIGN_PFX_PASS }}
+      # 远程签名通道（SignPath Foundation，开源项目免费）。
+      # 三个变量 + 一个 secret 都没配时，下面所有签名步骤自动跳过，
+      # 产物就是和以前一样的未签名包——这样审核没下来也能正常构建。
+      SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+      SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+      SIGNPATH_POLICY_SLUG: ${{ vars.SIGNPATH_POLICY_SLUG }}
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
     steps:
       - uses: actions/checkout@v7
 
@@ -230,9 +240,144 @@ jobs:
       - name: 核心逻辑测试
         run: dotnet test tests/Rest.Core.Tests/Rest.Core.Tests.csproj -c Release --nologo
 
-      - name: 构建（便携包 + 安装器）
+      - name: 发布（未签名）
         shell: pwsh
-        run: .\build.ps1 -Configuration Release -Zip -Installer -Version ${{ needs.version.outputs.version }}
+        run: |
+          # 走 SignPath 时本地不持私钥，必须让 build.ps1 别尝试 signtool；
+          # 走 PFX 通道时反过来，由 build.ps1 自己签
+          $p = @('-Configuration', 'Release', '-Version', $env:VERSION)
+          if ($env:SIGNPATH_PROJECT_SLUG) { $p += '-NoSign' }
+          & .\build.ps1 @p
+
+      # ── 第一轮签名：主程序 + 卸载器 ─────────────────────────────────
+      # Inno 的 unins000.exe 是"复制 setup 再改写"出来的，不带签名，
+      # 开了智能应用控制的机器能装不能卸。所以先让 ISCC 吐一个待签样本（这一遍
+      # 本来就以退出码 2 中止，-SignStub 内部已归零），连同主程序一起送去签。
+      - name: 产出待签名卸载器样本
+        if: env.SIGNPATH_PROJECT_SLUG != ''
+        shell: pwsh
+        run: .\build.ps1 -NoPublish -SignStub -Version $env:VERSION
+
+      - name: 打包待签名文件
+        if: env.SIGNPATH_PROJECT_SLUG != ''
+        shell: pwsh
+        run: |
+          $stub = Get-ChildItem dist\unins -Filter 'uninst-*.e32' -ErrorAction SilentlyContinue |
+                  Select-Object -First 1
+          if (-not $stub) { throw "没有待签名的卸载器样本" }
+
+          New-Item -ItemType Directory -Force -Path signin/app | Out-Null
+          Copy-Item dist\win-x64\Rest.exe signin/app/Rest.exe
+          # SignPath 的 pe-file 只认 .exe/.dll，.e32 改个扩展名再送签；
+          # Authenticode 覆盖的是文件内容，回填时改回 .e32 签名照样有效
+          $renamed = Join-Path 'signin/app' ($stub.BaseName + '.exe')
+          Copy-Item $stub.FullName $renamed
+
+          # 用系统 bsdtar 打 zip（不压缩，送签的是原始字节）
+          $zip = Join-Path $PWD 'signin/app.zip'
+          Push-Location signin/app
+          & "$env:SystemRoot\System32\tar.exe" -a -c -f $zip *
+          Pop-Location
+          if ($LASTEXITCODE -ne 0) { throw "打包待签名文件失败" }
+          Get-ChildItem signin/app | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: 上传待签名文件
+        if: env.SIGNPATH_PROJECT_SLUG != ''
+        id: upload-app
+        uses: actions/upload-artifact@v7
+        with:
+          name: rest-unsigned-app
+          path: windows/signin/app.zip
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: SignPath 签名（主程序 + 卸载器）
+        if: env.SIGNPATH_PROJECT_SLUG != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ env.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: app
+          github-artifact-id: ${{ steps.upload-app.outputs.artifact-id }}
+          output-artifact-directory: windows/signed/app
+
+      - name: 回填已签名的主程序与卸载器
+        if: env.SIGNPATH_PROJECT_SLUG != ''
+        shell: pwsh
+        run: |
+          Copy-Item signed/app/Rest.exe dist\win-x64\Rest.exe -Force
+          $signedStub = Get-ChildItem signed/app -Filter 'uninst-*.exe' -ErrorAction SilentlyContinue |
+                        Select-Object -First 1
+          if (-not $signedStub) { throw "签名结果里没有卸载器样本" }
+          Copy-Item $signedStub.FullName (Join-Path dist\unins ($signedStub.BaseName + '.e32')) -Force
+          Get-AuthenticodeSignature dist\win-x64\Rest.exe | Select-Object Status, StatusMessage | Format-List
+
+      # ── 编译安装器（内嵌已签名的主程序 + 已签名卸载器）──────────────
+      - name: 编译安装器
+        shell: pwsh
+        run: |
+          $p = @('-NoPublish', '-Installer', '-Version', $env:VERSION)
+          if ($env:SIGNPATH_PROJECT_SLUG) {
+            # 远程签名：本地签不了，内嵌已签好的卸载器副本
+            $p += @('-NoSign', '-SignUninstaller')
+          }
+          & .\build.ps1 @p
+
+      # ── 第二轮签名：安装器本体 ─────────────────────────────────────
+      # Inno Setup 不是 SignPath 支持的复合格式（不像 MSI 能深签），
+      # 所以内层文件必须在这一步之前签好，这里只签 setup.exe
+      - name: 打包待签名安装器
+        if: env.SIGNPATH_PROJECT_SLUG != ''
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist -Filter 'Rest-*-win-x64-setup.exe' | Select-Object -First 1
+          if (-not $setup) { throw "没有生成安装器" }
+          New-Item -ItemType Directory -Force -Path signin/installer | Out-Null
+          Copy-Item $setup.FullName signin/installer/
+          $zip = Join-Path $PWD 'signin/installer.zip'
+          Push-Location signin/installer
+          & "$env:SystemRoot\System32\tar.exe" -a -c -f $zip *
+          Pop-Location
+          if ($LASTEXITCODE -ne 0) { throw "打包待签名安装器失败" }
+          Get-ChildItem signin/installer | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: 上传待签名安装器
+        if: env.SIGNPATH_PROJECT_SLUG != ''
+        id: upload-installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: rest-unsigned-installer
+          path: windows/signin/installer.zip
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: SignPath 签名（安装器）
+        if: env.SIGNPATH_PROJECT_SLUG != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ env.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.upload-installer.outputs.artifact-id }}
+          output-artifact-directory: windows/signed/installer
+
+      - name: 回填已签名安装器
+        if: env.SIGNPATH_PROJECT_SLUG != ''
+        shell: pwsh
+        run: |
+          Get-ChildItem signed/installer -Filter '*.exe' | ForEach-Object {
+            Copy-Item $_.FullName (Join-Path 'dist' $_.Name) -Force
+            Get-AuthenticodeSignature (Join-Path 'dist' $_.Name) | Select-Object Status | Format-List
+          }
+
+      # 便携包必须最后打：里面的 Rest.exe 是中途被换成已签名版本的
+      - name: 打包便携包
+        shell: pwsh
+        run: .\build.ps1 -NoPublish -NoSign -Zip -Version $env:VERSION
 
       - name: 产物断言
         shell: pwsh
@@ -242,11 +387,21 @@ jobs:
           if ((Get-Item $exe).Length -lt 100KB) { throw "Rest.exe 太小，可能是空壳" }
           $ver = (Get-Item $exe).VersionInfo.ProductVersion
           Write-Host "Rest.exe 版本资源: $ver"
-          if ($ver -notlike "${{ needs.version.outputs.version }}*") { throw "版本资源 $ver 与期望不符" }
+          if ($ver -notlike "$env:VERSION*") { throw "版本资源 $ver 与期望不符" }
 
           $setup = Get-ChildItem dist/Rest-*-setup.exe -ErrorAction SilentlyContinue
           if (-not $setup) { throw "没有生成安装器" }
           Write-Host "安装器: $($setup.Name) $([math]::Round($setup.Length/1MB,1)) MB"
+
+          # 配了签名通道就必须真的签上，不能悄悄发未签名包
+          if ($env:SIGNPATH_PROJECT_SLUG -or $env:WINDOWS_SIGN_PFX_BASE64) {
+            foreach ($f in $exe, $setup.FullName) {
+              $sig = Get-AuthenticodeSignature $f
+              Write-Host "$([System.IO.Path]::GetFileName($f)) 签名: $($sig.Status) / $($sig.SignerCertificate.Subject)"
+              if ($sig.Status -ne 'Valid') { throw "签名无效：$f -> $($sig.Status)" }
+            }
+          }
+          else { Write-Host "未配置签名通道，本次产物未签名" }
 
       # 安装器不能只"编译通过"就算完：静默装一遍、跑一次、再卸掉。
       # 这一步能抓到 [Files] 路径写错、安装后缺文件、卸载残留这类问题。
@@ -267,14 +422,22 @@ jobs:
           }
           Write-Host "安装文件数: $((Get-ChildItem $dir -Recurse -File).Count)"
 
+          # 卸载器的签名是安装时从内嵌副本带过来的，这里顺手确认它真的带上了：
+          # 少了这一步，开了 SAC 的用户能装不能卸
+          if ($env:SIGNPATH_PROJECT_SLUG -or $env:WINDOWS_SIGN_PFX_BASE64) {
+            $u = Get-AuthenticodeSignature (Join-Path $dir 'unins000.exe')
+            Write-Host "卸载器签名: $($u.Status) / $($u.SignerCertificate.Subject)"
+            if ($u.Status -ne 'Valid') { throw "卸载器没有有效签名：$($u.Status)" }
+          }
+
           $t = Start-Process -FilePath (Join-Path $dir 'Rest.exe') -ArgumentList '--self-test' `
                              -Wait -PassThru -NoNewWindow
           if ($t.ExitCode -ne 0) { throw "已安装副本自检失败：$($t.ExitCode)" }
           Write-Host "已安装副本自检通过"
 
-          $u = Start-Process -FilePath (Join-Path $dir 'unins000.exe') -Wait -PassThru `
+          $u2 = Start-Process -FilePath (Join-Path $dir 'unins000.exe') -Wait -PassThru `
                              -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
-          if ($u.ExitCode -ne 0) { throw "卸载失败：$($u.ExitCode)" }
+          if ($u2.ExitCode -ne 0) { throw "卸载失败：$($u2.ExitCode)" }
 
           # 卸载器会把自己复制到临时目录再干活，Start-Process 返回时文件可能还没删完，
           # 所以轮询等目录消失，别用固定 sleep 赌

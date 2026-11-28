@@ -79,6 +79,18 @@ cd windows
 | `dist/win-x64/` | self-contained 发布目录（自带 .NET 运行时，约 70 MB） |
 | `dist/Rest-<版本>-win-x64-portable.zip` | 免安装包，解压即用 |
 | `dist/Rest-<版本>-win-x64-setup.exe` | 安装器，约 51 MB（LZMA2 压缩后） |
+| `dist/unins/uninst-<ver>-<hash>.e32` | 待签名卸载器样本，只在远程签名流程里出现 |
+
+签名相关的几个开关（CI 用，本地一般用不到）：
+
+| 开关 | 作用 |
+| --- | --- |
+| `-NoPublish` | 跳过 `dotnet publish`，复用现有 `dist/win-x64`（送签回填后重新打包时用） |
+| `-NoSign` | 跳过本地 `signtool`（签名交给远程服务时用） |
+| `-SignStub` | 只产出待签名卸载器样本就退出；ISCC 这一遍本来就以退出码 2 中止，已归零 |
+| `-SignUninstaller` | 编译安装器时内嵌已签名的卸载器副本（样本没签会直接报错） |
+
+远程签名的完整顺序见下面「签名通道」一节。
 
 也可以直接用 SDK 命令：
 
@@ -107,49 +119,95 @@ dotnet publish src/Rest.App/Rest.App.csproj -c Release -r win-x64 --self-contain
 CI 里会对安装器做一次冒烟测试：静默装到临时目录 → 断言 `Rest.exe` / `Rest.Core.dll` / `unins000.exe`
 都在 → 跑一次 `--self-test` → 静默卸载 → 断言目录已清空。只「编译通过」不算数。
 
-> ⚠️ 安装器解决的是「装起来体不体面」，**不解决 SAC 拦截**：`setup.exe` 自己也是未签名 PE，
-> 在开着 SAC 的机器上同样被拦（本机实测报「应用程序控制策略已阻止此文件」）。要真正消除拦截，
-> 只有受信任代码签名证书一条路，见下一节。
+> ⚠️ 未签名的 `setup.exe` 同样会被 SAC 拦：本机（SAC=Enforce）实测直接报
+> 「应用程序控制策略已阻止此文件」，连向导都出不来。拦的是 PE 加载，跟有没有安装器无关。
 
 ## 在 Windows 上运行的前提：Smart App Control
 
-Win11 的智能应用控制（SAC）会拦截**所有未取得微软云端信誉的可执行文件**，包括我们自己编译的
-`Rest.exe`。表现是双击毫无反应、没有任何报错，事件日志里只有一行：
+Win11 的智能应用控制（SAC）在强制模式下只放行两类程序：
+
+1. 微软的应用智能服务能预测为安全的应用；
+2. 用**微软受信任根计划内的 CA** 签发的证书签名的应用——哪怕它毫无下载量、服务从没见过它。
+
+不满足就拦在**镜像加载**层（CodeIntegrity 事件 3077/3033），表现是双击毫无反应、不弹任何错误框：
 
 ```
-'Rest.exe' was blocked by your organization's Device Guard policy.
+\'Rest.exe\' was blocked by your organization\'s Device Guard policy.
 ```
 
-它拦在**镜像加载**这一层（CodeIntegrity 事件 3077/3118），所以：
+因此：
 
-- **自签名证书签名无效**。实测把自签证书装进「受信任的根 + 受信任的发布者」再签 `Rest.exe`，
-  `Get-AuthenticodeSignature` 显示 `Valid`，但 SAC 照样拒绝执行——它认微软云端信誉，不认本地信任链。
-- `--self-test` / `--render` 也一起被拦，headless 模式救不了这个问题。
+- **自签名证书没用**。本机实测：自签证书签完 `Get-AuthenticodeSignature` 是 `UnknownError`
+  （自签根不在受信列表里），运行时直接被「应用程序控制策略已阻止此文件」拦掉。
+  就算把自签根装进本机「受信任的根」也不行——它不在微软受信任根计划里，SAC 不认。
+- `--self-test` / `--render` 一起被拦，headless 救不了。
+- **这和 SmartScreen 不是一回事**：SmartScreen 看下载量，OV 证书也要先攒信誉；SAC 只看证书链，
+  签一次就过。这是选方案的关键——不需要「慢慢养信誉」。
 
 三种处理方式：
 
 | 方式 | 代价 |
 | --- | --- |
-| 关掉 SAC（Windows 安全中心 → 应用和浏览器控制 → 智能应用控制） | **关掉后只能通过重装/重置系统才能再开启**，微软明确如此 |
-| 用受信任的代码签名证书签（Azure Trusted Signing 等） | 需实名与订阅，但这是对外分发唯一正规的解法 |
-| 在未开启 SAC 的机器或虚拟机上测试 | 只够开发自测，解决不了用户侧问题 |
+| 关掉 SAC（安全中心 → 应用和浏览器控制 → 智能应用控制） | **关掉后只能重装/重置系统才能再开**，微软明确如此，不该让用户这么干 |
+| 用受信任 CA 签发的证书签名 | 对外分发唯一正规的解法，见下 |
+| 换没开 SAC 的机器 / 虚拟机 | 只够开发自测，解决不了用户侧 |
 
-> 对外发布前必须处理这条：新装 Win11 有相当比例的机器开着 SAC，
-> 用户下载 zip 解压双击会**完全没反应**，连个错误框都不弹。
+### 签名通道
 
-**安装器也躲不过**：本机（SAC=Enforce）实测运行 `Rest-1.1.0-win-x64-setup.exe`，PowerShell 直接报
-「应用程序控制策略已阻止此文件」，连安装向导都出不来。拦的是 PE 加载，安装器同样是未签名 PE。
+两条，配哪条用哪条；都没配就发未签名包（CI 照样能过，只是用户侧还会被拦）。
 
-真正解掉这条只有受信任签名。CI 和 `build.ps1` 已经接好签名通道，拿到证书后配两个 secret 即可：
+**A. SignPath Foundation（开源项目免费）**
 
-| secret / 环境变量 | 内容 |
+证书由 Sectigo 签发（受信任根计划成员），主体写 `SignPath Foundation`，私钥存对方 HSM，
+本地和 CI 都不接触私钥。代价：只能在 GitHub 托管 runner 上构建、每次签名人工批准、发布者显示为基金会。
+
+`.github/workflows/build.yml` 的 windows job 已按这个模型拆好：
+
+```
+发布主程序（未签名）
+  → 产出待签名卸载器样本（-SignStub，ISCC 这一遍本来就以退出码 2 中止）
+  → Rest.exe + 样本 一起送签 → 回填
+  → 编译安装器（-Installer -SignUninstaller）
+  → 安装器送签 → 回填
+  → 打包便携包 → 断言签名必须 Valid → 安装 / 自检 / 卸载冒烟
+```
+
+审核通过后要配：
+
+| 类型 | 名字 | 说明 |
+| --- | --- | --- |
+| variable | `SIGNPATH_ORGANIZATION_ID` | 组织 ID |
+| variable | `SIGNPATH_PROJECT_SLUG` | 项目 slug；**不配则所有签名步骤自动跳过** |
+| variable | `SIGNPATH_POLICY_SLUG` | 签名策略 slug，例如 `release-signing` |
+| secret | `SIGNPATH_API_TOKEN` | submitter 角色的 API token |
+
+artifact configuration 用仓库里的 `.signpath/artifact-configurations/`（`app` / `installer`），
+内容还要同步粘到 SignPath 项目里。给审核看的签名策略页是仓库根的 `CODE-SIGNING-POLICY.md`。
+
+**B. 自己的证书（PFX）**
+
+| secret | 内容 |
 | --- | --- |
 | `WINDOWS_SIGN_PFX_BASE64` | 代码签名证书（.pfx）的 base64；为空就跳过签名 |
 | `WINDOWS_SIGN_PFX_PASS` | pfx 密码 |
 
-配了就会用 `signtool` 以 SHA256 + DigiCert 时间戳签 `Rest.exe` 和 `setup.exe`，签失败直接让构建红掉，
-不会悄悄发一个没签的包。个人开源项目可看 Certum 的 Open Source Code Signing（比 OV/EV 便宜得多，
-但要有公开仓库）；Azure Trusted Signing 需要组织资质，个人不好过。
+配了就用 `signtool` 以 SHA256 + DigiCert 时间戳签 `Rest.exe` 和 `setup.exe`，签失败直接让构建红掉，
+不会悄悄发一个没签的包。
+
+### 卸载器：只签 setup.exe 是不够的
+
+Inno 的 `unins000.exe` 是安装时「把 setup 复制一份再改写」生成的，复制品**不继承 setup 的签名**。
+结果是开了 SAC 的机器**装得上、卸不掉**（社区里 Seelen-UI 就栽在这条上）。
+
+`Rest.iss` 里用 `SignedUninstaller`（由 `/DSignUninstaller` 打开）解决，机制是编译两遍：
+
+1. `build.ps1 -SignStub` 第一遍产出 `dist\unins\uninst-<inno版>-<hash>.e32` 后主动中止；
+2. 把这个样本签掉、放回原处（远程签名时 CI 里改名成 `.exe` 送签，回填时改回 `.e32`）；
+3. `-Installer -SignUninstaller` 第二遍把签名内嵌进安装器，装出来的 `unins000.exe` 自带签名。
+
+实测：用测试证书签样本 → 重编译 → 安装后 `unins000.exe` 的签名者就是该证书，同时多出一个
+`unins000.msg`（消息文本必须外置，否则会破坏签名）。样本没签就重编译，会得到明确提示：
+「卸载器样本还没签名，签完放回原处再编译」。
 
 ### 开发自测的临时绕过：用 dotnet 宿主加载
 
