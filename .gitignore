@@ -18,3 +18,10 @@ DerivedData/
 # 签名证书与私钥（只能进 GitHub secret，绝不能提交）
 certs/
 *.p12
+
+# .NET / Windows 构建产物
+windows/**/bin/
+windows/**/obj/
+windows/dist/
+*.user
+*.suo

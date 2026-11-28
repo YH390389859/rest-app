@@ -1,0 +1,65 @@
+name: windows
+
+on:
+  push:
+    branches: [main, feat/windows-port]
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows.yml'
+  pull_request:
+    paths:
+      - 'windows/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: 还原
+        run: dotnet restore Rest.sln
+
+      # 先跑逻辑测试：两个平台的节奏模型必须一致，这条红了就别往下打了
+      - name: 核心逻辑测试
+        run: dotnet test tests/Rest.Core.Tests/Rest.Core.Tests.csproj -c Release --nologo
+
+      - name: 发布 win-x64
+        run: >
+          dotnet publish src/Rest.App/Rest.App.csproj
+          -c Release -r win-x64 --self-contained true
+          -o dist/win-x64
+
+      - name: 产物断言
+        shell: pwsh
+        run: |
+          $exe = 'dist/win-x64/Rest.exe'
+          if (-not (Test-Path $exe)) { throw "缺少 $exe" }
+          $size = (Get-Item $exe).Length
+          Write-Host "Rest.exe $size bytes"
+          if ($size -lt 100KB) { throw "Rest.exe 太小，可能是空壳" }
+
+      - name: 无界面自检
+        shell: pwsh
+        run: |
+          & ./dist/win-x64/Rest.exe --self-test
+          Write-Host "exit=$LASTEXITCODE"
+          if ($LASTEXITCODE -ne 0) { throw "自检失败" }
+
+      - name: 打包
+        shell: pwsh
+        run: Compress-Archive -Path dist/win-x64/* -DestinationPath dist/Rest-win-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Rest-windows-x64
+          path: windows/dist/Rest-win-x64.zip
+          retention-days: 30

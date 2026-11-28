@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 19041 是拿到 Windows.Media.Control（SMTC）投影的最低版本 -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>Rest.Platform.Windows</RootNamespace>
+    <!-- 允许在 macOS 上编译这一层（只有纯 WinRT + P/Invoke，没有 WPF）。
+         界面工程 Rest.App 必须在 Windows 上编，这里不开这个开关。 -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Rest.Core/Rest.Core.csproj" />
+  </ItemGroup>
+
+</Project>

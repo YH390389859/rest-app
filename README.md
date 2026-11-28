@@ -10,6 +10,20 @@
 2. **界面太朴素** → 接入必应每日壁纸（4K），跨全屏覆盖。
 3. **倒计时结束直接跳到下一轮，和界面显示不符** → 支持"停留等按钮"或"全透明遮罩 + 任意键鼠动作才继续"。
 
+## Windows 版本
+
+`windows/` 下是同一套节奏模型的 Windows 移植（C# / .NET 8 + WPF）。macOS 的 UI 与媒体层
+依赖 AppKit / CoreAudio / MediaRemote，无法直接编译到 Windows，因此那边重写了平台层，
+但**计时与休息节奏的语义只有一份**，由 `windows/tests/Rest.Core.Tests` 的 22 个用例锁住。
+
+```powershell
+cd windows
+.\build.ps1 -Configuration Release -Test -Zip
+```
+
+细节（架构映射、调试参数、已知差异、验证清单）见 [windows/README.md](windows/README.md)。
+CI 在 `.github/workflows/windows.yml`，会跑逻辑测试 + 发布 win-x64 + 无界面自检。
+
 ## 构建与运行
 
 ```bash

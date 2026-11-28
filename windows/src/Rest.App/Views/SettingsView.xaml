@@ -1,0 +1,294 @@
+<UserControl x:Class="Rest.App.Views.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:Rest.App.Views"
+             FontFamily="{StaticResource UiFont}"
+             Background="#F5F5F7"
+             UseLayoutRounding="True">
+
+    <UserControl.Resources>
+        <views:EnumToBoolConverter x:Key="EnumToBool" />
+
+        <!-- macOS 风格开关：40×22 圆角轨道 + 圆点，选中变绿 -->
+        <Style x:Key="Switch" TargetType="CheckBox">
+            <Setter Property="Width" Value="40" />
+            <Setter Property="Height" Value="22" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid Width="40" Height="22">
+                            <Border x:Name="Track" CornerRadius="11" Background="#E3E3E8" />
+                            <Border x:Name="Thumb" Width="18" Height="18" CornerRadius="9"
+                                    Background="White" HorizontalAlignment="Left" Margin="2,0,0,0">
+                                <Border.Effect>
+                                    <DropShadowEffect Color="Black" Opacity="0.18" BlurRadius="3" ShadowDepth="1" />
+                                </Border.Effect>
+                            </Border>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Track" Property="Background" Value="#34C759" />
+                                <Setter TargetName="Thumb" Property="HorizontalAlignment" Value="Right" />
+                                <Setter TargetName="Thumb" Property="Margin" Value="0,0,2,0" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Track" Property="Opacity" Value="0.4" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="White" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="BorderBrush" Value="#E5E5EA" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="14,4" />
+        </Style>
+
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#6E6E73" />
+            <Setter Property="Margin" Value="4,0,0,6" />
+        </Style>
+
+        <Style x:Key="SectionFooter" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="#8A8A8E" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="4,6,4,0" />
+        </Style>
+
+        <Style x:Key="RowLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="#1D1D1F" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <Style x:Key="RowSeparator" TargetType="Rectangle">
+            <Setter Property="Height" Value="1" />
+            <Setter Property="Fill" Value="#F0F0F2" />
+            <Setter Property="Margin" Value="0,0,0,0" />
+        </Style>
+
+        <!-- 一行：左边标签，右边控件 -->
+        <Style x:Key="Row" TargetType="Grid">
+            <Setter Property="Margin" Value="0,9" />
+        </Style>
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,4,0">
+        <StackPanel Margin="18,16,18,20">
+
+            <!-- 小憩 -->
+            <TextBlock Text="小憩" Style="{StaticResource SectionHeader}" />
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="启用「小憩」" Style="{StaticResource RowLabel}" />
+                        <CheckBox Style="{StaticResource Switch}" HorizontalAlignment="Right"
+                                  IsChecked="{Binding MicroEnabled, Mode=TwoWay}" />
+                    </Grid>
+                    <Rectangle Style="{StaticResource RowSeparator}" />
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="持续时间" Style="{StaticResource RowLabel}" />
+                        <views:Stepper HorizontalAlignment="Right" Suffix="秒"
+                                       Minimum="5" Maximum="300" Step="5"
+                                       Value="{Binding MicroBreakSeconds, Mode=TwoWay}" />
+                    </Grid>
+                    <Rectangle Style="{StaticResource RowSeparator}" />
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="每" Style="{StaticResource RowLabel}" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <views:Stepper Suffix="分钟" Minimum="1" Maximum="120" Step="1"
+                                           Value="{Binding MicroBreakEveryMinutes, Mode=TwoWay}" />
+                        </StackPanel>
+                    </Grid>
+                    <Rectangle Style="{StaticResource RowSeparator}" />
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="允许延后小憩" Style="{StaticResource RowLabel}" />
+                        <CheckBox Style="{StaticResource Switch}" HorizontalAlignment="Right"
+                                  IsEnabled="{Binding MicroEnabled}"
+                                  IsChecked="{Binding MicroAllowPostpone, Mode=TwoWay}" />
+                    </Grid>
+                    <Rectangle Style="{StaticResource RowSeparator}" />
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="严格模式（不能跳过小憩）" Style="{StaticResource RowLabel}" />
+                        <CheckBox Style="{StaticResource Switch}" HorizontalAlignment="Right"
+                                  IsEnabled="{Binding MicroEnabled}"
+                                  IsChecked="{Binding MicroStrictMode, Mode=TwoWay}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+            <TextBlock Style="{StaticResource SectionFooter}"
+                       Text="「小憩」是频率较高的短暂休息，可以用来伸展和放松。默认每 10 分钟一次，每次 20 秒。" />
+
+            <!-- 休息 -->
+            <TextBlock Text="休息" Style="{StaticResource SectionHeader}" Margin="4,18,0,6" />
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="启用「休息」" Style="{StaticResource RowLabel}" />
+                        <CheckBox Style="{StaticResource Switch}" HorizontalAlignment="Right"
+                                  IsChecked="{Binding LongEnabled, Mode=TwoWay}" />
+                    </Grid>
+                    <Rectangle Style="{StaticResource RowSeparator}" />
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="持续时间" Style="{StaticResource RowLabel}" />
+                        <views:Stepper HorizontalAlignment="Right" Suffix="分钟"
+                                       Minimum="1" Maximum="60" Step="1"
+                                       Value="{Binding LongBreakMinutes, Mode=TwoWay}" />
+                    </Grid>
+                    <Rectangle Style="{StaticResource RowSeparator}" />
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="每" Style="{StaticResource RowLabel}" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <views:Stepper Suffix="次小憩" Minimum="1" Maximum="12" Step="1"
+                                           Value="{Binding MicrosBeforeLong, Mode=TwoWay}" />
+                            <TextBlock VerticalAlignment="Center" Margin="8,0,0,0" FontSize="11.5" Foreground="#8A8A8E">
+                                <Run Text="（约每" />
+                                <Run Text="{Binding LongCycleMinutes, StringFormat={}{0:0}}" />
+                                <Run Text="分钟）" />
+                            </TextBlock>
+                        </StackPanel>
+                    </Grid>
+                    <Rectangle Style="{StaticResource RowSeparator}" />
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="允许延后休息" Style="{StaticResource RowLabel}" />
+                        <CheckBox Style="{StaticResource Switch}" HorizontalAlignment="Right"
+                                  IsEnabled="{Binding LongEnabled}"
+                                  IsChecked="{Binding LongAllowPostpone, Mode=TwoWay}" />
+                    </Grid>
+                    <Rectangle Style="{StaticResource RowSeparator}" />
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="严格模式（不能跳过休息）" Style="{StaticResource RowLabel}" />
+                        <CheckBox Style="{StaticResource Switch}" HorizontalAlignment="Right"
+                                  IsEnabled="{Binding LongEnabled}"
+                                  IsChecked="{Binding LongStrictMode, Mode=TwoWay}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+            <TextBlock Style="{StaticResource SectionFooter}"
+                       Text="「休息」频率较低、持续时间更长。默认每 3 个槽位一次，也就是 2 次小憩后、约 30 分钟时来一次 5 分钟的休息。&#10;休息是挂在槽位上的：小憩间隔 ×（小憩次数 + 1）。修改后从下一轮开始生效。" />
+
+            <!-- 延后 -->
+            <TextBlock Text="延后" Style="{StaticResource SectionHeader}" Margin="4,18,0,6" />
+            <Border Style="{StaticResource Card}">
+                <Grid Style="{StaticResource Row}">
+                    <TextBlock Text="延后时长" Style="{StaticResource RowLabel}" />
+                    <views:Stepper HorizontalAlignment="Right" Suffix="分钟"
+                                   Minimum="1" Maximum="30" Step="1"
+                                   Value="{Binding PostponeMinutes, Mode=TwoWay}" />
+                </Grid>
+            </Border>
+
+            <!-- 结束行为 -->
+            <TextBlock Text="休息结束后的行为" Style="{StaticResource SectionHeader}" Margin="4,18,0,6" />
+            <Border Style="{StaticResource Card}">
+                <StackPanel Margin="0,6">
+                    <RadioButton GroupName="EndBehavior" Margin="0,4" FontSize="13" Foreground="#1D1D1F"
+                                 Content="直接进入下一轮"
+                                 IsChecked="{Binding BreakEndBehavior, Mode=TwoWay,
+                                             Converter={StaticResource EnumToBool}, ConverterParameter=Auto}" />
+                    <RadioButton GroupName="EndBehavior" Margin="0,4" FontSize="13" Foreground="#1D1D1F"
+                                 Content="停留，等按钮"
+                                 IsChecked="{Binding BreakEndBehavior, Mode=TwoWay,
+                                             Converter={StaticResource EnumToBool}, ConverterParameter=Manual}" />
+                    <RadioButton GroupName="EndBehavior" Margin="0,4" FontSize="13" Foreground="#1D1D1F"
+                                 Content="透明遮罩 + 任意操作"
+                                 IsChecked="{Binding BreakEndBehavior, Mode=TwoWay,
+                                             Converter={StaticResource EnumToBool}, ConverterParameter=WaitForInput}" />
+                    <TextBlock x:Name="EndBehaviorDetail" Style="{StaticResource SectionFooter}" Margin="0,6,0,0" />
+                </StackPanel>
+            </Border>
+
+            <!-- 视频与音乐 -->
+            <TextBlock Text="视频与音乐" Style="{StaticResource SectionHeader}" Margin="4,18,0,6" />
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="休息开始时自动暂停正在播放的视频 / 音乐" Style="{StaticResource RowLabel}"
+                                   TextWrapping="Wrap" MaxWidth="330" HorizontalAlignment="Left" />
+                        <CheckBox Style="{StaticResource Switch}" HorizontalAlignment="Right"
+                                  IsChecked="{Binding AutoPauseMedia, Mode=TwoWay}" />
+                    </Grid>
+                    <Rectangle Style="{StaticResource RowSeparator}" />
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="休息结束后自动恢复播放" Style="{StaticResource RowLabel}" />
+                        <CheckBox Style="{StaticResource Switch}" HorizontalAlignment="Right"
+                                  IsEnabled="{Binding AutoPauseMedia}"
+                                  IsChecked="{Binding ResumeMediaAfterBreak, Mode=TwoWay}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+            <TextBlock Style="{StaticResource SectionFooter}"
+                       Text="Windows 用的是系统自带的 SMTC（系统媒体传输控件），可以按应用分别暂停，不需要任何额外权限——这一点和 macOS 版靠 MediaRemote / AppleScript / 辅助功能三级降级完全不同。" />
+
+            <!-- 外观 -->
+            <TextBlock Text="外观" Style="{StaticResource SectionHeader}" Margin="4,18,0,6" />
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="使用必应每日壁纸作为休息背景" Style="{StaticResource RowLabel}"
+                                   TextWrapping="Wrap" MaxWidth="330" HorizontalAlignment="Left" />
+                        <CheckBox Style="{StaticResource Switch}" HorizontalAlignment="Right"
+                                  IsChecked="{Binding UseBingWallpaper, Mode=TwoWay}" />
+                    </Grid>
+                    <Rectangle Style="{StaticResource RowSeparator}" />
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="壁纸地区" Style="{StaticResource RowLabel}" />
+                        <ComboBox x:Name="MarketBox" HorizontalAlignment="Right" MinWidth="120"
+                                  DisplayMemberPath="Name" SelectedValuePath="Code"
+                                  IsEnabled="{Binding UseBingWallpaper}"
+                                  SelectedValue="{Binding WallpaperMarket, Mode=TwoWay}" />
+                    </Grid>
+                    <Rectangle Style="{StaticResource RowSeparator}" />
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="在全部显示器上显示遮罩" Style="{StaticResource RowLabel}" />
+                        <CheckBox Style="{StaticResource Switch}" HorizontalAlignment="Right"
+                                  IsChecked="{Binding AllDisplays, Mode=TwoWay}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- 其他 -->
+            <TextBlock Text="其他" Style="{StaticResource SectionHeader}" Margin="4,18,0,6" />
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="休息开始 / 结束时播放提示音" Style="{StaticResource RowLabel}" />
+                        <CheckBox Style="{StaticResource Switch}" HorizontalAlignment="Right"
+                                  IsChecked="{Binding PlaySound, Mode=TwoWay}" />
+                    </Grid>
+                    <Rectangle Style="{StaticResource RowSeparator}" />
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="检测到我离开电脑时跳过这次休息" Style="{StaticResource RowLabel}" />
+                        <CheckBox Style="{StaticResource Switch}" HorizontalAlignment="Right"
+                                  IsChecked="{Binding SkipWhenIdle, Mode=TwoWay}" />
+                    </Grid>
+                    <Rectangle Style="{StaticResource RowSeparator}" />
+                    <Grid Style="{StaticResource Row}">
+                        <TextBlock Text="登录时自动启动" Style="{StaticResource RowLabel}" />
+                        <CheckBox Style="{StaticResource Switch}" HorizontalAlignment="Right"
+                                  IsChecked="{Binding LaunchAtLogin, Mode=TwoWay}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- 底部操作 -->
+            <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
+                <Button Content="预览休息界面" Click="OnPreviewClick" Padding="16,8"
+                        Background="White" BorderBrush="#D8D8DE" BorderThickness="1" Cursor="Hand" />
+                <Button Content="打开数据目录" Click="OnOpenDataFolderClick" Padding="16,8" Margin="10,0,0,0"
+                        Background="White" BorderBrush="#D8D8DE" BorderThickness="1" Cursor="Hand" />
+            </StackPanel>
+            <TextBlock Style="{StaticResource SectionFooter}" Margin="4,10,4,0"
+                       Text="设置保存在 %APPDATA%\Rest\settings.json，壁纸缓存在同目录的 wallpapers 里。删掉文件即恢复默认。" />
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

@@ -1,0 +1,127 @@
+# Rest for Windows
+
+macOS 版（仓库根目录）的 Windows 移植，用 **C# / .NET 8 + WPF** 重写平台层。
+
+核心约束：**节奏模型只有一份语义**。`windows/src/Rest.Core/BreakPlanner.cs` 是
+`Sources/Rest/Scheduler.swift` 的逐条移植，并由 `tests/Rest.Core.Tests` 里 22 个用例锁住行为；
+改任何一边都必须同步另一边，否则测试会红。
+
+## 为什么不能"直接编译到 Windows"
+
+Swift 那套 UI 和媒体控制层在 Windows 上不存在：
+
+| macOS 依赖 | Windows 上有没有 | 本仓库的处理 |
+| --- | --- | --- |
+| AppKit / SwiftUI（`NSScreen`、`NSWindow`、`NSStatusItem`） | 没有 | WPF 窗口 + WinForms `NotifyIcon` / `Screen` |
+| MediaRemote（**私有框架**，`dlopen`） | 没有 | SMTC `GlobalSystemMediaTransportControlsSessionManager`（**公开 API**） |
+| CoreAudio 进程对象 API | 没有 | `IAudioSessionManager2` COM 互操作 |
+| AppleScript / 辅助功能点「暂停」按钮 | 没有 | 不需要——SMTC 能按应用直接下发暂停 |
+| `SMAppService` 登录启动 | 没有 | `HKCU\...\CurrentVersion\Run` |
+| `CGEventSource` 空闲检测 | 没有 | `GetLastInputInfo` |
+| `NSSound` 系统音 | 没有 | `winmm.dll!PlaySound` + 系统 wav |
+
+好消息：Windows 的媒体控制反而更简单。macOS 版要实现「系统 Now Playing 槽位 → AppleScript →
+辅助功能按按钮」三级降级，是因为系统只有一个 Now Playing 槽；Windows 每个应用有独立 SMTC 会话，
+一条 `TryPauseAsync()` 就够了。
+
+## 工程结构
+
+```
+windows/
+├── Rest.sln
+├── build.ps1                      # 对应 macOS 的 build.sh
+├── src/
+│   ├── Rest.Core/                 # 纯 .NET，不含任何 Windows API，可在 macOS 上编译+测试
+│   │   ├── BreakPlanner.cs        # ← 移植自 Scheduler.swift（唯一需要逐字对齐的类）
+│   │   ├── RestSettings.cs        # ← 移植自 AppSettings.swift
+│   │   └── Storage.cs             # 设置持久化（JSON）+ IClock 时钟抽象
+│   ├── Rest.Platform.Windows/     # WinRT + P/Invoke + COM，无 UI（也能在 macOS 上编译）
+│   │   ├── Media/MediaService.cs          # SMTC 枚举 / 暂停 / 恢复
+│   │   ├── Media/AudioSessionInterop.cs   # Core Audio 会话枚举，补上没 SMTC 的播放器
+│   │   ├── Wallpaper/BingWallpaperService.cs
+│   │   └── Host/SystemServices.cs         # 空闲检测 / 开机自启 / 提示音
+│   ├── Rest.App/                  # WPF 界面（WPF 工程只能在 Windows 上跑，但能在 macOS 上编）
+│   │   ├── App.xaml.cs            # 对应 AppDelegate.swift
+│   │   ├── BreakCoordinator.cs    # 对应 BreakCoordinator.swift
+│   │   ├── TrayIconHost.cs        # 对应 StatusBarController.swift
+│   │   └── Views/                 # BreakView / SettingsView / OverlayManager
+│   └── Resources/Rest.ico         # 由 AppIcon.icns 转出来的 16/32/128/256 图标
+└── tests/Rest.Core.Tests/         # 节奏模型契约测试
+```
+
+## 构建
+
+要求：Windows 10 1809+ / Windows 11，.NET 8 SDK。
+
+```powershell
+cd windows
+.\build.ps1                                  # Debug 构建到 dist/win-x64
+.\build.ps1 -Configuration Release -Test -Zip # 跑测试 + 出 Release 压缩包
+.\build.ps1 -SelfTest                         # 构建后跑一次无界面自检
+```
+
+也可以直接用 SDK 命令：
+
+```powershell
+dotnet test tests/Rest.Core.Tests/Rest.Core.Tests.csproj
+dotnet publish src/Rest.App/Rest.App.csproj -c Release -r win-x64 --self-contained -o dist/win-x64
+```
+
+**交叉编译**：`Rest.Core` 和 `Rest.Platform.Windows` 在 macOS / Linux 上也能 `dotnet build`
+（前者纯 .NET，后者只用到 WinRT 投影和 P/Invoke 声明）。`Rest.App` 需要
+`-p:EnableWindowsTargeting=true` 才能在 macOS 上编译，产物可以正常在 Windows 上运行。
+
+## 调试参数（对齐 macOS 版的同名参数）
+
+| 参数 | 作用 |
+| --- | --- |
+| `--preview` | 启动 0.8 秒后弹一次休息界面 |
+| `--render <路径>` | 把休息界面离屏渲染成 PNG（2560×1440），**不需要桌面会话** |
+| `--render-settings <路径>` | 渲染设置界面 PNG |
+| `--dump-media` | 打印当前所有音频源及其可控性 |
+| `--test-pause [关键字]` | 对匹配的音频源执行一次暂停→恢复，验证通道 |
+| `--self-test` | 无界面自检：设置读写 / 节奏模型 / 音频枚举 / 壁纸 / 显示器，失败返回 1 |
+| `--verbose` | 打印节奏与倒计时日志 |
+
+`--self-test` 和 `--render` 是为了远程（SSH）调试准备的：看不到桌面也能判断"跑没跑起来、
+界面长什么样"。日志同时写到 `%TEMP%\rest-debug.log`。
+
+## 行为对齐清单
+
+已经按 macOS 版逐条实现的：
+
+- [x] 节奏模型：每段工作 = 小憩间隔；`breakNumber % slots == 0` 时来长休息
+- [x] 跳过不占槽位；推迟会把槽位还回去，N 分钟后再来同一种
+- [x] 长休息结束后计数归零
+- [x] 只开一种休息时退化成纯时间间隔（只开休息 → 一段工作 = 一个完整周期）
+- [x] 严格模式按类型分别生效，禁用对应的跳过 / 延后按钮和菜单项
+- [x] 两种「结束行为」：直接进入下一轮 / 停留等按钮 / 透明遮罩 + 任意操作（800ms 宽限期）
+- [x] 多屏遮罩（可只遮主屏）；分辨率变化 / 插拔屏幕时整块重铺，200ms 防抖
+- [x] 人不在电脑前（>120s 无输入）跳过本次休息，预览模式不受此限
+- [x] 必应每日壁纸：8 天窗口轮换、按 id 缓存、预取下一张、超过 24 张清理
+- [x] 音频源列表：每 5 秒刷新，中途开新视频也能列出来；单行暂停 / 恢复、全部暂停
+- [x] 休息结束按设置恢复播放；用户自己播起来了就不插手
+- [x] 托盘菜单状态文案（下次小憩/休息、N 次小憩后、严格模式提示）
+- [x] 提示音、开机自启
+
+## 已知差异（有意为之）
+
+1. **字体与字距**：macOS 用 `.system(size:weight:design:.rounded)` 且对标题做了 `tracking(8)`；
+   WPF 没有字距属性，标题用 14pt 粗体近似（差一点点疏朗感）。
+2. **遮罩不用分层透明窗口**：`AllowsTransparency=false` 走普通窗口，4K 壁纸性能好得多；
+   代价是「透明遮罩」模式改为「隐藏窗口 + 低层钩子」，视觉结果一致。
+3. **图标来源**：macOS 用 `NSWorkspace` 拿应用图标；Windows 用
+   `Icon.ExtractAssociatedIcon(进程主模块)`，权限受限的进程拿不到图标，界面退回首字母。
+4. **设置界面**：原生 WPF 控件（自绘开关 / 步进器），不是 SwiftUI Form 的观感，
+   分组和文案保持一致。
+5. **权限**：Windows 版**不需要任何授权**（没有辅助功能 / 自动化概念）。
+
+## 还没验证的部分
+
+以下只能在真的 Windows 上跑过才算数（当前只在 macOS 上完成了编译和核心逻辑测试）：
+
+- 多屏 / 混合 DPI 下遮罩的实际摆放与覆盖效果
+- 全屏应用、独占全屏游戏之上能否覆盖
+- SMTC 对各家播放器的实际可控性（Chrome / Edge / Spotify / QQ 音乐 / 网易云 / PotPlayer）
+- 托盘图标在 Win11 的溢出区表现
+- 壁纸在 4K 屏上的加载耗时
