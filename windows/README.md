@@ -1,9 +1,9 @@
 # Rest for Windows
 
-macOS 版（仓库根目录）的 Windows 移植，用 **C# / .NET 8 + WPF** 重写平台层。
+macOS 版（仓库里的 `macos/` 目录）的 Windows 移植，用 **C# / .NET 8 + WPF** 重写平台层。
 
-核心约束：**节奏模型只有一份语义**。`windows/src/Rest.Core/BreakPlanner.cs` 是
-`Sources/Rest/Scheduler.swift` 的逐条移植，并由 `tests/Rest.Core.Tests` 里 22 个用例锁住行为；
+核心约束：**节奏模型只有一份语义**。`src/Rest.Core/BreakPlanner.cs` 是
+`../macos/Sources/Rest/Scheduler.swift` 的逐条移植，并由 `tests/Rest.Core.Tests` 里 22 个用例锁住行为；
 改任何一边都必须同步另一边，否则测试会红。
 
 ## 为什么不能"直接编译到 Windows"
@@ -30,6 +30,9 @@ Swift 那套 UI 和媒体控制层在 Windows 上不存在：
 windows/
 ├── Rest.sln
 ├── build.ps1                      # 对应 macOS 的 build.sh
+├── installer/
+│   ├── Rest.iss                   # Inno Setup 安装器脚本（按用户安装，不弹 UAC）
+│   └── languages/ChineseSimplified.isl   # Inno 官方安装包没带简中，随仓库带一份
 ├── src/
 │   ├── Rest.Core/                 # 纯 .NET，不含任何 Windows API，可在 macOS 上编译+测试
 │   │   ├── BreakPlanner.cs        # ← 移植自 Scheduler.swift（唯一需要逐字对齐的类）
@@ -51,7 +54,11 @@ windows/
 
 ## 构建
 
-要求：Windows 10 1809+ / Windows 11，.NET 8 SDK。
+要求：Windows 10 1809+ / Windows 11，.NET 8 SDK。打安装器还需要 Inno Setup 6。
+
+```powershell
+winget install JRSoftware.InnoSetup        # 只在要 -Installer 时需要
+```
 
 > 装 SDK 时注意：若系统开着 WinINET 代理（`127.0.0.1:7890` 之类），`dotnet-install.ps1`
 > 会走代理并可能长时间卡在下载阶段。用 `curl.exe -L --noproxy '*'` 直接下 zip 再
@@ -59,10 +66,19 @@ windows/
 
 ```powershell
 cd windows
-.\build.ps1                                  # Debug 构建到 dist/win-x64
-.\build.ps1 -Configuration Release -Test -Zip # 跑测试 + 出 Release 压缩包
-.\build.ps1 -SelfTest                         # 构建后跑一次无界面自检
+.\build.ps1                                    # Debug 构建到 dist/win-x64
+.\build.ps1 -Configuration Release -Test -Zip  # 跑测试 + 出 Release 便携包
+.\build.ps1 -Configuration Release -Zip -Installer   # 再额外打一个安装器
+.\build.ps1 -SelfTest                          # 构建后跑一次无界面自检
 ```
+
+产物（版本号取自仓库根的 `VERSION`，也可以用 `-Version` 覆盖）：
+
+| 文件 | 说明 |
+| --- | --- |
+| `dist/win-x64/` | self-contained 发布目录（自带 .NET 运行时，约 70 MB） |
+| `dist/Rest-<版本>-win-x64-portable.zip` | 免安装包，解压即用 |
+| `dist/Rest-<版本>-win-x64-setup.exe` | 安装器，约 51 MB（LZMA2 压缩后） |
 
 也可以直接用 SDK 命令：
 
@@ -74,6 +90,26 @@ dotnet publish src/Rest.App/Rest.App.csproj -c Release -r win-x64 --self-contain
 **交叉编译**：`Rest.Core` 和 `Rest.Platform.Windows` 在 macOS / Linux 上也能 `dotnet build`
 （前者纯 .NET，后者只用到 WinRT 投影和 P/Invoke 声明）。`Rest.App` 需要
 `-p:EnableWindowsTargeting=true` 才能在 macOS 上编译，产物可以正常在 Windows 上运行。
+
+## 安装器
+
+`installer/Rest.iss`（Inno Setup 6）生成 `Rest-<版本>-win-x64-setup.exe`，几个刻意的选择：
+
+- **按用户安装**：`PrivilegesRequired=lowest`，装到 `%LOCALAPPDATA%\Programs\Rest`，不弹 UAC，
+  不需要管理员权限。休息提醒是常驻托盘的个人工具，没必要进 `Program Files`。
+- **固定目录 + 固定 AppId**：升级时原地覆盖，「应用和功能」里只有一条卸载项，
+  不会像便携版那样换个解压目录就多出一份互不相认的副本。
+- **不替用户开机自启**：那件事归应用自己的设置项管。
+- **卸载保留设置**：只删安装目录，`%LOCALAPPDATA%\Rest` 下的设置和壁纸缓存留着，
+  重装回来还是原来的节奏。
+- 安装器界面是简体中文（`installer/languages/ChineseSimplified.isl`）。
+
+CI 里会对安装器做一次冒烟测试：静默装到临时目录 → 断言 `Rest.exe` / `Rest.Core.dll` / `unins000.exe`
+都在 → 跑一次 `--self-test` → 静默卸载 → 断言目录已清空。只「编译通过」不算数。
+
+> ⚠️ 安装器解决的是「装起来体不体面」，**不解决 SAC 拦截**：`setup.exe` 自己也是未签名 PE，
+> 在开着 SAC 的机器上同样被拦（本机实测报「应用程序控制策略已阻止此文件」）。要真正消除拦截，
+> 只有受信任代码签名证书一条路，见下一节。
 
 ## 在 Windows 上运行的前提：Smart App Control
 
@@ -100,6 +136,20 @@ Win11 的智能应用控制（SAC）会拦截**所有未取得微软云端信誉
 
 > 对外发布前必须处理这条：新装 Win11 有相当比例的机器开着 SAC，
 > 用户下载 zip 解压双击会**完全没反应**，连个错误框都不弹。
+
+**安装器也躲不过**：本机（SAC=Enforce）实测运行 `Rest-1.1.0-win-x64-setup.exe`，PowerShell 直接报
+「应用程序控制策略已阻止此文件」，连安装向导都出不来。拦的是 PE 加载，安装器同样是未签名 PE。
+
+真正解掉这条只有受信任签名。CI 和 `build.ps1` 已经接好签名通道，拿到证书后配两个 secret 即可：
+
+| secret / 环境变量 | 内容 |
+| --- | --- |
+| `WINDOWS_SIGN_PFX_BASE64` | 代码签名证书（.pfx）的 base64；为空就跳过签名 |
+| `WINDOWS_SIGN_PFX_PASS` | pfx 密码 |
+
+配了就会用 `signtool` 以 SHA256 + DigiCert 时间戳签 `Rest.exe` 和 `setup.exe`，签失败直接让构建红掉，
+不会悄悄发一个没签的包。个人开源项目可看 Certum 的 Open Source Code Signing（比 OV/EV 便宜得多，
+但要有公开仓库）；Azure Trusted Signing 需要组织资质，个人不好过。
 
 ### 开发自测的临时绕过：用 dotnet 宿主加载
 
