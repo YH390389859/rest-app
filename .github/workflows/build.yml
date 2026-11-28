@@ -244,9 +244,11 @@ jobs:
         shell: pwsh
         run: |
           # 走 SignPath 时本地不持私钥，必须让 build.ps1 别尝试 signtool；
-          # 走 PFX 通道时反过来，由 build.ps1 自己签
-          $p = @('-Configuration', 'Release', '-Version', $env:VERSION)
-          if ($env:SIGNPATH_PROJECT_SLUG) { $p += '-NoSign' }
+          # 走 PFX 通道时反过来，由 build.ps1 自己签。
+          # 注意 splatting 必须用哈希表：数组展开是「位置参数」，
+          # 会把 '-Configuration' 本身当第一个参数传进去，直接 ValidateSet 报错
+          $p = @{ Configuration = 'Release'; Version = $env:VERSION }
+          if ($env:SIGNPATH_PROJECT_SLUG) { $p.NoSign = $true }
           & .\build.ps1 @p
 
       # ── 第一轮签名：主程序 + 卸载器 ─────────────────────────────────
@@ -318,10 +320,11 @@ jobs:
       - name: 编译安装器
         shell: pwsh
         run: |
-          $p = @('-NoPublish', '-Installer', '-Version', $env:VERSION)
+          $p = @{ NoPublish = $true; Installer = $true; Version = $env:VERSION }
           if ($env:SIGNPATH_PROJECT_SLUG) {
             # 远程签名：本地签不了，内嵌已签好的卸载器副本
-            $p += @('-NoSign', '-SignUninstaller')
+            $p.NoSign = $true
+            $p.SignUninstaller = $true
           }
           & .\build.ps1 @p
 
