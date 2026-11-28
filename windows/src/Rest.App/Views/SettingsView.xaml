@@ -152,7 +152,9 @@
                                            Value="{Binding MicrosBeforeLong, Mode=TwoWay}" />
                             <TextBlock VerticalAlignment="Center" Margin="8,0,0,0" FontSize="11.5" Foreground="#8A8A8E">
                                 <Run Text="（约每" />
-                                <Run Text="{Binding LongCycleMinutes, StringFormat={}{0:0}}" />
+                                <!-- Run.Text 默认是 TwoWay 绑定，而 LongCycleMinutes 是只读计算属性，
+                                     不写 Mode=OneWay 会在首次布局时抛「无法对只读属性进行 TwoWay 绑定」 -->
+                                <Run Text="{Binding LongCycleMinutes, Mode=OneWay, StringFormat={}{0:0}}" />
                                 <Run Text="分钟）" />
                             </TextBlock>
                         </StackPanel>
