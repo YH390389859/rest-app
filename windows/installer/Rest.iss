@@ -47,6 +47,18 @@ SolidCompression=yes
 WizardStyle=modern
 MinVersion=10.0.19041
 
+; 卸载器签名。Inno 的 unins000.exe 是"把 setup 自己复制一份再改写"生成的，
+; 复制品不继承 setup 的签名——开了智能应用控制的机器能装、但卸不掉
+; （Seelen-UI 就是栽在这上面）。SignedUninstaller=yes 会把一份预先签好的
+; 卸载器副本的签名内嵌进去，代价是必须编译两遍：
+;   第一遍：产出 dist\unins\uninst-<ver>-<hash>.e32 后主动中止，等你签它
+;   签完   后把文件放回原处，再编译一次才出 setup.exe
+; 只有 /DSignUninstaller 时才打开，普通本地构建保持单遍。
+#ifdef SignUninstaller
+SignedUninstaller=yes
+SignedUninstallerDir=..\dist\unins
+#endif
+
 [Languages]
 ; Inno Setup 官方安装包里没带简体中文（Languages 目录只有 29 种语言），
 ; 这里把官方 issrc 仓库的 ChineseSimplified.isl 放进仓库，避免构建时联网拉翻译。
