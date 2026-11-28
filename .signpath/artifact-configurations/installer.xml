@@ -1,0 +1,14 @@
+<!--
+  第二轮签名：安装器本体。
+
+  Inno Setup 不是 SignPath 支持的复合格式，无法深签（对比 MSI 的
+  <msi-file> 可以连内部文件一起签），所以内层的 Rest.exe 与卸载器必须在
+  编译前签好（见 app.xml），这里只对 setup.exe 本身做 Authenticode 签名。
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="Rest-*-win-x64-setup.exe">
+      <authenticode-sign/>
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

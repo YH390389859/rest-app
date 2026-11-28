@@ -1,0 +1,20 @@
+<!--
+  第一轮签名：主程序 + 卸载器样本。
+
+  SignPath 的 pe-file 只认 .exe/.dll 这类扩展名，而 Inno Setup 生成的待签名
+  卸载器是 .e32，所以 CI 里先把它改名成 .exe 打进来，签完再改回原名
+  （Authenticode 签名只覆盖文件内容，改名不影响有效性）。
+
+  Rest.exe 必须在编译安装器之前签好：Inno 在编译时把 Rest.exe 原样压进去，
+  装到机器上的就是这一份，事后补签 exe 不会改变安装器里的副本。
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="Rest.exe">
+      <authenticode-sign/>
+    </pe-file>
+    <pe-file path="uninst-*.exe">
+      <authenticode-sign/>
+    </pe-file>
+  </zip-file>
+</artifact-configuration>
