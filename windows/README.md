@@ -53,6 +53,10 @@ windows/
 
 要求：Windows 10 1809+ / Windows 11，.NET 8 SDK。
 
+> 装 SDK 时注意：若系统开着 WinINET 代理（`127.0.0.1:7890` 之类），`dotnet-install.ps1`
+> 会走代理并可能长时间卡在下载阶段。用 `curl.exe -L --noproxy '*'` 直接下 zip 再
+> `Expand-Archive` 最稳妥。
+
 ```powershell
 cd windows
 .\build.ps1                                  # Debug 构建到 dist/win-x64
@@ -71,6 +75,32 @@ dotnet publish src/Rest.App/Rest.App.csproj -c Release -r win-x64 --self-contain
 （前者纯 .NET，后者只用到 WinRT 投影和 P/Invoke 声明）。`Rest.App` 需要
 `-p:EnableWindowsTargeting=true` 才能在 macOS 上编译，产物可以正常在 Windows 上运行。
 
+## 在 Windows 上运行的前提：Smart App Control
+
+Win11 的智能应用控制（SAC）会拦截**所有未取得微软云端信誉的可执行文件**，包括我们自己编译的
+`Rest.exe`。表现是双击毫无反应、没有任何报错，事件日志里只有一行：
+
+```
+'Rest.exe' was blocked by your organization's Device Guard policy.
+```
+
+它拦在**镜像加载**这一层（CodeIntegrity 事件 3077/3118），所以：
+
+- **自签名证书签名无效**。实测把自签证书装进「受信任的根 + 受信任的发布者」再签 `Rest.exe`，
+  `Get-AuthenticodeSignature` 显示 `Valid`，但 SAC 照样拒绝执行——它认微软云端信誉，不认本地信任链。
+- `--self-test` / `--render` 也一起被拦，headless 模式救不了这个问题。
+
+三种处理方式：
+
+| 方式 | 代价 |
+| --- | --- |
+| 关掉 SAC（Windows 安全中心 → 应用和浏览器控制 → 智能应用控制） | **关掉后只能通过重装/重置系统才能再开启**，微软明确如此 |
+| 用受信任的代码签名证书签（Azure Trusted Signing 等） | 需实名与订阅，但这是对外分发唯一正规的解法 |
+| 在未开启 SAC 的机器或虚拟机上测试 | 只够开发自测，解决不了用户侧问题 |
+
+> 对外发布前必须处理这条：新装 Win11 有相当比例的机器开着 SAC，
+> 用户下载 zip 解压双击会**完全没反应**，连个错误框都不弹。
+
 ## 调试参数（对齐 macOS 版的同名参数）
 
 | 参数 | 作用 |
@@ -83,8 +113,17 @@ dotnet publish src/Rest.App/Rest.App.csproj -c Release -r win-x64 --self-contain
 | `--self-test` | 无界面自检：设置读写 / 节奏模型 / 音频枚举 / 壁纸 / 显示器，失败返回 1 |
 | `--verbose` | 打印节奏与倒计时日志 |
 
-`--self-test` 和 `--render` 是为了远程（SSH）调试准备的：看不到桌面也能判断"跑没跑起来、
-界面长什么样"。日志同时写到 `%TEMP%\rest-debug.log`。
+`--self-test` 和 `--render` 是为远程调试准备的：看不到桌面也能判断"跑没跑起来、界面长什么样"，
+日志同时写到 `%TEMP%\rest-debug.log`。
+
+但**通过 SSH 登录跑不起 GUI 进程**：Windows OpenSSH 的会话落在 Session 0（服务会话），
+没有交互桌面——实测连 `notepad` 都起不来，WPF 窗口自然也没有。要在无人值守的情况下验证界面，
+需要用计划任务把进程投到已登录用户的会话（`/it` 表示"仅用户登录时运行"，**未实测**）：
+
+```powershell
+schtasks /create /tn RestSelfTest /tr "C:\...\Rest.exe --self-test" /sc once /st 23:59 /ru <用户名> /it /f
+schtasks /run /tn RestSelfTest
+```
 
 ## 行为对齐清单
 
@@ -118,8 +157,10 @@ dotnet publish src/Rest.App/Rest.App.csproj -c Release -r win-x64 --self-contain
 
 ## 还没验证的部分
 
-以下只能在真的 Windows 上跑过才算数（当前只在 macOS 上完成了编译和核心逻辑测试）：
+以下只能在真的 Windows 上跑过才算数（当前只在 macOS 上完成了编译和核心逻辑测试，
+连「进程能不能起来」都还没在真机上验证过——测试机被 SAC 拦在镜像加载层）：
 
+- 程序能否正常启动、单实例互斥是否生效
 - 多屏 / 混合 DPI 下遮罩的实际摆放与覆盖效果
 - 全屏应用、独占全屏游戏之上能否覆盖
 - SMTC 对各家播放器的实际可控性（Chrome / Edge / Spotify / QQ 音乐 / 网易云 / PotPlayer）
