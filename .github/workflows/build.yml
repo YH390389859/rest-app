@@ -92,13 +92,32 @@ jobs:
         with:
           # actions/cache 的 path 以仓库根为基准，不受 working-directory 影响
           path: macos/.build
-          key: ${{ runner.os }}-spm-${{ hashFiles('macos/Package.swift', 'macos/Package.resolved') }}
-          restore-keys: ${{ runner.os }}-spm-
+          # v2：v1 的缓存是在「仓库根就是包根」时建的，build.db 里的绝对路径已经失效，
+          # 恢复回来反而会干扰 SwiftPM，换前缀让它们自然淘汰
+          key: ${{ runner.os }}-spm-v2-${{ hashFiles('macos/Package.swift', 'macos/Package.resolved') }}
+          restore-keys: ${{ runner.os }}-spm-v2-
 
       - name: 构建（arm64 + x86_64）
         env:
           UNIVERSAL: "1"
-        run: ./build.sh release
+        run: |
+          set -o pipefail
+          pwd
+          swift --version
+          cat ../VERSION
+          ./build.sh release 2>&1 | tee "$RUNNER_TEMP/macos-build.log"
+
+      # 失败时把日志尾部打成 annotation：Actions 的原始日志要登录才能下，
+      # annotation 通过 check-runs API 就能读到，远程排查时少绕一圈
+      - name: 构建失败原因
+        if: failure()
+        run: |
+          LOG="$RUNNER_TEMP/macos-build.log"
+          [ -f "$LOG" ] || { echo "::error::构建脚本没有产生日志"; exit 0; }
+          tail -n 8 "$LOG" | while IFS= read -r line; do
+            line="${line//\%/%25}"; line="${line//$'\r'/}"
+            echo "::error::$line"
+          done
 
       - name: 校验产物
         run: |
@@ -256,8 +275,15 @@ jobs:
           $u = Start-Process -FilePath (Join-Path $dir 'unins000.exe') -Wait -PassThru `
                              -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
           if ($u.ExitCode -ne 0) { throw "卸载失败：$($u.ExitCode)" }
-          Start-Sleep -Seconds 2
-          if (Test-Path (Join-Path $dir 'Rest.exe')) { throw "卸载后 Rest.exe 还在" }
+
+          # 卸载器会把自己复制到临时目录再干活，Start-Process 返回时文件可能还没删完，
+          # 所以轮询等目录消失，别用固定 sleep 赌
+          $gone = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            if (-not (Test-Path (Join-Path $dir 'Rest.exe'))) { $gone = $true; break }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $gone) { throw "卸载 30 秒后 Rest.exe 还在：$dir" }
           Write-Host "卸载干净"
 
       - uses: actions/upload-artifact@v7
