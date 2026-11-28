@@ -101,6 +101,24 @@ Win11 的智能应用控制（SAC）会拦截**所有未取得微软云端信誉
 > 对外发布前必须处理这条：新装 Win11 有相当比例的机器开着 SAC，
 > 用户下载 zip 解压双击会**完全没反应**，连个错误框都不弹。
 
+### 开发自测的临时绕过：用 dotnet 宿主加载
+
+SAC 拦的是**镜像加载**这一步——被地图加载的是 `Rest.exe` 这个 apphost；托管程序集走 CLR
+自己的加载器，不过这道检查。所以「框架依赖 + `dotnet Rest.dll`」在开着 SAC 的机器上能正常跑：
+
+```powershell
+dotnet publish src/Rest.App/Rest.App.csproj -c Release `
+  -f net8.0-windows10.0.19041.0 --no-self-contained -o dist/fx
+dotnet dist/fx/Rest.dll              # 正常启动（托盘 + 计时）
+dotnet dist/fx/Rest.dll --self-test  # 自检
+dotnet dist/fx/Rest.dll --render C:\temp\break.png
+```
+
+真机实测（Win11 26300、SAC=Enforce）：`Rest.exe` 直接双击/命令行都是 `Permission denied`，
+事件日志 3077/3118 记一次拦截；同目录换成 `dotnet Rest.dll` 五项自检全过、托盘和遮罩都正常。
+
+**这只够自己调试**：用户机器上没有 .NET 运行时，也不会敲命令，对外分发仍然必须走签名。
+
 ## 调试参数（对齐 macOS 版的同名参数）
 
 | 参数 | 作用 |
@@ -155,14 +173,25 @@ schtasks /run /tn RestSelfTest
    分组和文案保持一致。
 5. **权限**：Windows 版**不需要任何授权**（没有辅助功能 / 自动化概念）。
 
-## 还没验证的部分
+## 真机验证记录
 
-以下只能在真的 Windows 上跑过才算数（当前只在 macOS 上完成了编译和核心逻辑测试，
-连「进程能不能起来」都还没在真机上验证过——测试机被 SAC 拦在镜像加载层）：
+环境：Windows 11 26300 / x64，双 4K 屏（主屏 3840×2160 @150%，副屏 3840×2160 @200%，副屏在主屏左侧）。
 
-- 程序能否正常启动、单实例互斥是否生效
-- 多屏 / 混合 DPI 下遮罩的实际摆放与覆盖效果
+已验证：
+
+- [x] 启动、托盘、单实例互斥（第二个实例打印「Rest 已在运行」后退出，退出码 0）
+- [x] 双屏混合 DPI：两块遮罩窗口的物理矩形分别是 `(0,0,3840×2160)` 与 `(-3840,0,3840×2160)`，
+      各自铺满、内容水平居中（实测偏差 ≤1px），200% 屏上的界面比 150% 屏大约 1.33 倍，符合 DPI 缩放
+- [x] 必应每日壁纸：显示、右下角版权文案、8 天轮换的图片缓存都正常
+- [x] `--self-test` 五项全过；`Rest.Core.Tests` 22 个用例全绿
+- [x] `--render` / `--render-settings` 离屏渲染正常，可用于没有桌面的远程排查
+- [x] **修掉一个首次打开设置窗口必崩的 bug**：`SettingsView.xaml` 里 `Run.Text` 绑定
+      `LongCycleMinutes` 时没写 `Mode=OneWay`，而 `Run.Text` 默认 TwoWay、该属性是只读计算属性，
+      WPF 在首次布局时抛 `InvalidOperationException`（真机上表现为设置窗口闪一下就没了）
+
+还没验证：
+
 - 全屏应用、独占全屏游戏之上能否覆盖
 - SMTC 对各家播放器的实际可控性（Chrome / Edge / Spotify / QQ 音乐 / 网易云 / PotPlayer）
 - 托盘图标在 Win11 的溢出区表现
-- 壁纸在 4K 屏上的加载耗时
+- 壁纸在 4K 屏上的加载耗时（4K 图在双屏上都加载正常，耗时可接受）
