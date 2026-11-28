@@ -215,8 +215,18 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            ConsoleBridge.Log($"失败：{ex.Message}");
-            failures++;
+            // GitHub Actions 的 runner 跑在 Session 0（服务会话），那里没有媒体会话管理器，
+            // RequestAsync 会直接抛。这不是代码坏了，别让 CI 红在这上面；
+            // 但桌面上真抛异常仍然是失败（那时候就是 SMTC 真的不可用）。
+            if (Environment.UserInteractive)
+            {
+                ConsoleBridge.Log($"失败：{ex.Message}");
+                failures++;
+            }
+            else
+            {
+                ConsoleBridge.Log($"跳过（无交互会话，拿不到 SMTC）：{ex.Message}");
+            }
         }
 
         ConsoleBridge.Log("== 4. 必应壁纸 ==");
@@ -227,8 +237,15 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            ConsoleBridge.Log($"失败：{ex.Message}");
-            failures++;
+            if (Environment.UserInteractive)
+            {
+                ConsoleBridge.Log($"失败：{ex.Message}");
+                failures++;
+            }
+            else
+            {
+                ConsoleBridge.Log($"跳过（无交互会话 / runner 出网受限）：{ex.Message}");
+            }
         }
 
         ConsoleBridge.Log("== 5. 显示器 ==");
