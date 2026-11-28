@@ -109,6 +109,20 @@ SAC（智能应用控制）拦的是 PE 镜像加载，和有没有安装器无�
 
 签名策略（提供给签名服务的说明）：[CODE-SIGNING-POLICY.md](CODE-SIGNING-POLICY.md)。
 
+### Code signing
+
+Windows 发行版通过 [SignPath Foundation](https://signpath.org/) 提供的**免费代码签名服务**签名
+（申请审核中）。证书签发给 SignPath Foundation，私钥保存在其 HSM 中，本仓库与 CI 都不接触私钥，
+用户看到的发布者为 `SignPath Foundation`。构建只在 GitHub 托管的 runner 上、从本仓库对应 tag 的
+提交产出，每次签名请求由仓库所有者人工批准。
+
+> Rest's Windows releases are signed using the free code signing service provided by
+> SignPath Foundation. The certificate is issued to SignPath Foundation and its private
+> key never leaves their HSM; builds are produced only by GitHub-hosted runners from
+> this repository.
+
+不收集任何用户数据；唯一的对外请求是下载必应每日壁纸图片，不上传任何信息。
+
 
 ## 更多
 
