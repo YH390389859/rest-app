@@ -1,16 +1,21 @@
-# SwiftPM 构建产物
-.build/
-.swiftpm/
-build/
-dist/
+# 仓库里只有两个平台目录：macos/ 和 windows/，构建产物只在各自目录下产生
 
-# macOS
+# macOS（SwiftPM + 打包产物）
+macos/.build/
+macos/.swiftpm/
+macos/build/
+macos/dist/
 .DS_Store
-
-# Xcode
 *.xcodeproj/xcuserdata/
 *.xcuserstate
 DerivedData/
+
+# Windows / .NET
+windows/**/bin/
+windows/**/obj/
+windows/dist/
+*.user
+*.suo
 
 # 本地工具数据
 .workbuddy/
@@ -18,10 +23,4 @@ DerivedData/
 # 签名证书与私钥（只能进 GitHub secret，绝不能提交）
 certs/
 *.p12
-
-# .NET / Windows 构建产物
-windows/**/bin/
-windows/**/obj/
-windows/dist/
-*.user
-*.suo
+*.pfx

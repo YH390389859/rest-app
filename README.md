@@ -2,265 +2,104 @@
 
 [![build](https://github.com/YH390389859/rest-app/actions/workflows/build.yml/badge.svg)](https://github.com/YH390389859/rest-app/actions/workflows/build.yml)
 
-一个参考 [Stretchly](https://github.com/hovancik/stretchly) 思路、用原生 Swift + AppKit/SwiftUI 写的 macOS 休息提醒菜单栏应用。
+休息提醒工具，两个平台各自原生实现：
 
-针对三个具体痛点做了重做：
+- **macOS**：Swift + AppKit/SwiftUI，菜单栏应用
+- **Windows**：C# / .NET 8 + WPF，托盘应用
 
-1. **看视频时进入休息，全屏下没法暂停视频** → 自动识别"谁在占用音频 / 谁在播放"，一键（或自动）暂停。
-2. **界面太朴素** → 接入必应每日壁纸（4K），跨全屏覆盖。
-3. **倒计时结束直接跳到下一轮，和界面显示不符** → 支持"停留等按钮"或"全透明遮罩 + 任意键鼠动作才继续"。
+参考 [Stretchly](https://github.com/hovancik/stretchly) 的节奏思路，针对三个痛点做了重做：全屏看视频时能在休息遮罩里暂停播放、休息界面接必应每日 4K 壁纸并跨屏覆盖、倒计时结束后按「自动 / 等按钮 / 任意键鼠动作」三种策略收尾。
 
-## Windows 版本
+**节奏模型的语义只有一份**：`macos/Sources/Rest/Scheduler.swift` 与 `windows/src/Rest.Core/BreakPlanner.cs` 逐条对齐，由 Windows 侧 22 个单元测试锁住行为。UI 与媒体控制层按平台各写一套——macOS 靠 CoreAudio + MediaRemote，Windows 靠 SMTC + Core Audio 会话。
 
-`windows/` 下是同一套节奏模型的 Windows 移植（C# / .NET 8 + WPF）。macOS 的 UI 与媒体层
-依赖 AppKit / CoreAudio / MediaRemote，无法直接编译到 Windows，因此那边重写了平台层，
-但**计时与休息节奏的语义只有一份**，由 `windows/tests/Rest.Core.Tests` 的 22 个用例锁住。
+## 下载
+
+到 [Releases](https://github.com/YH390389859/rest-app/releases/latest) 取最新版本（`<版本>` 即仓库根 `VERSION` 的内容）：
+
+| 平台 | 文件 | 说明 |
+| --- | --- | --- |
+| macOS | `Rest-<版本>.dmg` | 拖进「应用程序」即可 |
+| macOS | `Rest-<版本>.zip` | 便携包 |
+| Windows | `Rest-<版本>-win-x64-setup.exe` | 安装器，按用户安装、不弹 UAC，自带 .NET 运行时 |
+| Windows | `Rest-<版本>-win-x64-portable.zip` | 免安装，解压即用 |
+
+要求：macOS 14+；Windows 10 1809+ / 11（x64）。
+
+> 两个包目前都是**未获系统信任的签名**，第一次打开会被系统挡一下：
+> macOS 要在「隐私与安全性」里点「仍要打开」，Windows 会弹 SmartScreen（点「更多信息 → 仍要运行」）。
+> 开了智能应用控制（SAC）的 Win11 更严格，会直接拦掉，见下面「签名现状」。
+
+## 仓库结构
+
+```
+rest-app/
+├── VERSION                     # 唯一版本号来源，两个平台构建时都读它
+├── macos/                      # Swift Package + 打包脚本
+│   ├── Package.swift
+│   ├── Sources/Rest/           # 18 个 Swift 文件
+│   ├── Resources/              # Info.plist / AppIcon.icns
+│   ├── tools/                  # 图标生成 / 自签名证书 / DMG 打包
+│   ├── build.sh                # 编译 + 签名 + 可选 --dmg / --install
+│   └── README.md               # macOS 侧技术细节
+├── windows/                    # .NET 解决方案
+│   ├── Rest.sln
+│   ├── src/Rest.Core/          # 纯 .NET：节奏模型、设置、存储
+│   ├── src/Rest.Platform.Windows/  # SMTC / 音频会话 / 壁纸 / 系统集成
+│   ├── src/Rest.App/           # WPF 界面
+│   ├── tests/Rest.Core.Tests/  # 22 个节奏模型用例
+│   ├── installer/Rest.iss      # Inno Setup 安装器
+│   ├── build.ps1               # 编译 + 测试 + 便携包 + 安装器
+│   └── README.md               # Windows 侧技术细节
+└── .github/workflows/build.yml # 一条流水线出两个平台的包
+```
+
+两个平台目录完全平行，谁都不寄生在谁里面：根目录没有任何 Swift 或 .NET 工程文件，
+`git clone` 之后想构建哪个平台就进哪个目录。
+
+## 构建
+
+macOS（在 `macos/` 下）：
+
+```bash
+./build.sh                          # 产出 build/Rest.app
+./build.sh release --dmg            # 顺带打 dist/Rest-<版本>.dmg
+UNIVERSAL=1 ./build.sh release      # 通用二进制（arm64 + x86_64）
+```
+
+Windows（在 `windows/` 下，需要 .NET 8 SDK；打安装器还要 Inno Setup 6）：
 
 ```powershell
-cd windows
-.\build.ps1 -Configuration Release -Test -Zip
+winget install JRSoftware.InnoSetup
+.\build.ps1 -Configuration Release -Test -Zip -Installer
 ```
 
-细节（架构映射、调试参数、已知差异、验证清单）见 [windows/README.md](windows/README.md)。
-CI 在 `.github/workflows/windows.yml`，会跑逻辑测试 + 发布 win-x64 + 无界面自检。
+版本号不用手改代码：两个脚本默认读仓库根的 `VERSION`，也可以临时用 `VERSION=v1.2.3 ./build.sh` 或 `-Version 1.2.3` 覆盖。
 
-## 构建与运行
+## 发版
 
-```bash
-./build.sh                          # 产出 build/Rest.app（arm64）
-./build.sh release --dmg            # 顺带打 dist/Rest-1.0.0.dmg
-./build.sh release --install        # 顺带装到 /Applications 并启动
-UNIVERSAL=1 ./build.sh release      # 通用二进制（arm64 + x86_64），慢一倍
-VERSION=v1.2.0 ./build.sh release   # 指定版本号，写进 Info.plist
-open build/Rest.app                 # 直接运行（或拖到 /Applications）
-```
+1. 改 `VERSION`（比如 `1.1.1`），提交；
+2. 打 tag：`git tag -a v1.1.1 -m "..."`；
+3. `git push origin main --follow-tags`。
 
-DMG 里就是 `Rest.app` + 一个指向 `/Applications` 的快捷方式，双击挂载后拖过去即可。嫌不够好看可以自己加背景图和图标位置，但那样得靠 Finder 摆（CI 里没有 Finder 会话，AppleScript 会失败），所以这里保持纯 `hdiutil`、无脚本依赖。
+CI（`.github/workflows/build.yml`）的三个 job：
 
-要求 macOS 14+、Xcode 命令行工具。签名默认走**本地自签名证书**（见下节），没配证书时退回 ad-hoc；"登录时自动启动"需要把 App 放到 `/Applications` 才能真正生效。
+- `version`：读 `VERSION`，**断言 tag 名与它一致**，不一致直接失败；
+- `macos` / `windows`：并行构建，各自上传 artifact；
+- `release`：只在 tag 上跑，等两个平台都成功，才把 4 个包挂到同一个 Release。
 
-### 代码签名
+推到 `main` 或开 PR 时也会两边都构建（产物作为 artifact 留 30 天），只是不发 Release——这样任何一次改动都能拿到两个平台的包来验，不用先打 tag。
 
-`codesign -s -`（ad-hoc）没有身份，TCC 只能按 cdhash 记授权——每次重新编译 cdhash 都变，于是「辅助功能 / 自动化」反复失效，系统设置里还会堆出一串 `Rest 23-30-19-781` 这种带时间戳的条目。
+## 签名现状
 
-换成一张固定证书后，TCC 改按 `identifier + 证书指纹` 识别（`codesign -d -r-` 能看到 `designated => identifier "com.yanghui.rest" and certificate root = H"..."`），**重装、升级、重新编译都不掉权限**：
+| 平台 | 现在 | 用户侧表现 | 彻底解决 |
+| --- | --- | --- | --- |
+| macOS | 本地自签名证书（CI 用 `SIGNING_P12` secret，没有则 ad-hoc） | 首次打开需在「隐私与安全性」放行；TCC 授权不再随编译失效 | Apple Developer ID + 公证 |
+| Windows | 未签名（CI 已接好 `WINDOWS_SIGN_PFX_BASE64` / `WINDOWS_SIGN_PFX_PASS`，配了就自动签） | SmartScreen 提示；SAC 开启时直接拦截（**安装器也一样被拦**） | 受信任代码签名证书 |
 
-```bash
-tools/make-signing-cert.sh          # 生成 10 年期自签名证书 + 独立钥匙串（幂等）
-./build.sh release --install        # 之后构建自动用这张证书签
-```
+SAC（智能应用控制）拦的是 PE 镜像加载，和有没有安装器无关：本机（SAC=Enforce）实测运行未签名的
+`setup.exe` 会直接报「应用程序控制策略已阻止此文件」。所以「做个安装器」只解决了安装体验，
+没有解决拦截；那条只能靠证书。
 
-脚本做三件事，缺一件就会被钥匙串弹窗卡住：
+## 更多
 
-1. `openssl` 出一张带 `extendedKeyUsage=codeSigning` 的自签名证书（不带这个 EKU，`codesign` 根本认不出这是签名身份）；
-2. 建**独立钥匙串** `~/Library/Keychains/rest-signing.keychain-db`（导进登录钥匙串的话，每次取私钥都会被访问控制拦一次）；
-3. `security set-key-partition-list -S apple-tool:,apple:,codesign:` 放行 `codesign`，再加一步真签名自检。
-
-签的时候**不加 `--options runtime`**：hardened runtime 会禁止 App 发送 Apple Event，而暂停播放正是靠 `osascript` 发出去的，开了 runtime 反而把功能签死（runtime 只有公证才需要）。
-
-CI 里是可选的：没有 `SIGNING_P12` secret 就退回 ad-hoc，有就用它签并断言产物 `Authority=Rest Self Signed`，避免哪天悄悄退回 ad-hoc。
-
-```bash
-base64 -i certs/rest-signing.p12 | pbcopy   # → secret SIGNING_P12
-                                            # → secret SIGNING_P12_PASS = rest-signing
-```
-
-注意这只解决「本机权限稳定」，**不解决别人的 Gatekeeper**——自签名证书没有 Apple 根信任，陌生用户装了照样要手动放行。要彻底消掉「无法验证开发者」只能上付费开发者账号（Developer ID + 公证）。
-
-### 自动打包
-
-`.github/workflows/build.yml`：push 到 `main`、开 PR、手动触发都会跑，产出 arm64 + x86_64 的通用二进制，同时打 `.zip` 和 `.dmg`，作为 artifact 保留 30 天；推一个 `v*` tag（如 `git tag v1.0.1 && git push --tags`）会把版本号写进 Info.plist，并把两个包直接发到 GitHub Releases。
-
-runner 用的是 `macos-26-intel` 而不是 `macos-latest`：后者现在是 macOS 26 arm64，实测排队 15 分钟会被系统直接 cancel（官方注解只提"队列变长"，没提这茬）。Intel 镜像基本秒分配，通用二进制照样交叉编译出 arm64。
-
-
-调试用参数：
-
-```bash
-./build/Rest.app/Contents/MacOS/Rest --preview                    # 启动后立即弹一次休息界面
-./build/Rest.app/Contents/MacOS/Rest --test-rescreen              # 复现「分辨率变了窗口没跟上」，验证遮罩重铺
-./build/Rest.app/Contents/MacOS/Rest --render /tmp/ui.png         # 把休息界面离屏渲染成 PNG（不需要录屏权限）
-./build/Rest.app/Contents/MacOS/Rest --render-settings /tmp/s.png # 渲染设置界面（走窗口 cacheDisplay）
-./build/Rest.app/Contents/MacOS/Rest --verbose                    # 打印节奏与倒计时日志
-```
-
-## 节奏模型（对齐 Stretchly）
-
-默认值直接照 Stretchly 来：
-
-| | 持续时间 | 间隔 |
-|---|---|---|
-| 小憩 | 20 秒 | 每 10 分钟 |
-| 休息 | 5 分钟 | 2 次小憩后（约 30 分钟） |
-
-这里有个容易搞错的地方：**长休息不是独立计时的，而是挂在「槽位」上**。Stretchly 的 `app/breaksPlanner.js` 里，每一段工作的长度都等于小憩间隔，然后靠 `breakNumber % (longBreakInterval + 1) === 0` 决定这次该小憩还是休息——托盘提示才会写成「下次休息 2 次小憩后」而不是「大约 20 分钟后」。所以设置里的「休息 每 30 分」其实是 10 分 × 3 个槽位的换算结果，改小憩间隔会连带改变休息的实际发生时间。
-
-几条随之而来的规则：
-
-- 每完成一次休息，计数归零重新数（10 → 20 → 30 分各一次，30 分那次是长休息）。
-- 跳过休息不占槽位；延后休息会把这一种休息的槽位还回去，N 分钟后再来同一种。
-- 只开小憩或只开休息时退化成纯时间间隔：只开休息的话，一段工作就直接等于一个完整周期。
-- 「严格模式」按类型分别生效，打开后对应类型的跳过 / 延后按钮和菜单项都会被禁用。
-
-## 图标
-
-`Resources/AppIcon.icns` 由 `tools/make-icon.swift` 生成：CoreGraphics 画渐变圆角方块（Apple 的 1024/824/185 网格）+ 白色茶杯 + 两道热气，10 个尺寸交给 `iconutil` 打包成 icns。改配色或造型后重新生成：
-
-```bash
-swiftc -O tools/make-icon.swift -o /tmp/makeicon && /tmp/makeicon Resources/AppIcon.icns
-```
-
-`build.sh` 在 icns 缺失时会自动调用它，所以克隆下来直接 `./build.sh` 也有图标。
-
-## 三个问题的技术实现
-
-### 1. 检测"正在占用音频的应用"并暂停
-
-**枚举音频占用者** —— CoreAudio 的「进程对象」API（macOS 14.2+ 公开 API，**不需要任何权限**）：
-
-| 用途 | API |
-| --- | --- |
-| 拿到系统里所有参与音频的进程 | `kAudioHardwarePropertyProcessObjectList` |
-| 该进程是否有活跃输出流 | `kAudioProcessPropertyIsRunningOutput` |
-| 进程 PID / bundle id | `kAudioProcessPropertyPID` / `kAudioProcessPropertyBundleID` |
-| 给定 PID 反查进程对象 | `kAudioHardwarePropertyTranslatePIDToProcessObject` |
-
-Chromium / WebKit 的音频跑在 helper 进程里，代码里会把 `com.google.Chrome.helper` 归并回 `com.google.Chrome`，否则界面会显示成一堆"Google Chrome Helper"。
-
-**注意**：`IsRunningOutput == 1` 只代表"音频输出流开着"，播放器暂停后常常仍然保持这条流。所以它只能当"候选"，不能当"正在播放"。
-
-**判断是否真的在播** —— `MediaRemote.framework`（系统私有框架）：
-
-- `MRMediaRemoteGetNowPlayingApplicationPID` → 当前媒体属于哪个 App
-- `MRMediaRemoteGetNowPlayingApplicationIsPlaying` → 是否真的在播放
-- `MRMediaRemoteGetNowPlayingInfo` → 标题 / 播放速率
-
-**下发暂停** —— 同一框架的 `MRMediaRemoteSendCommand`：
-
-| 命令 | 值 |
-| --- | --- |
-| play | 0 |
-| pause | 1 |
-| togglePlayPause | 2 |
-| stop | 3 |
-
-它和键盘上的媒体键效果等价，但**不需要辅助功能授权**，也不会像 AppleScript 那样弹出「自动化」权限申请。
-
-**多个播放器同时出声时的问题** —— 系统只有一个 Now Playing 槽位，`MRMediaRemoteSendCommand` 只会作用在其中一个上，Chrome 在放视频、网易云在放歌时，另一个照旧响。
-
-有个看起来更合适的私有 API `MRMediaRemoteSendCommandToApp`（可以按 bundle id 定向下发），但实测/查证结论是**用不了**：
-
-- 它的真实签名是 7 个参数（`command, options, MROriginProtobuf, bundleID, sendOptions, queue, block`）；
-- 更重要的是，第三方签名的进程调用后，指令会被系统**重定向到当前 Now Playing 播放器**；真正定向路由需要 Apple 私有的 `com.apple.mediaremote.send-commands` entitlement，外部签名一加就会在启动时崩溃。
-
-所以这里改成**逐个应用挑选可用通道**，由 `PerAppMediaControl` 实现：
-
-| 通道 | 用在谁身上 | 代价 |
-| --- | --- | --- |
-| 系统媒体控制（MediaRemote） | 当前 Now Playing 那个应用 | 无 |
-| AppleScript | 脚本字典（`Contents/Resources/*.sdef`）里真的声明了 `pause` / `playpause` 的应用，如 Music、Spotify、VLC、IINA | 首次弹一次「自动化」授权 |
-| 辅助功能（AX） | 其余应用：遍历它的 AX 树，找文案是「暂停 / Pause」的按钮按下去 | 需要「辅助功能」授权 |
-
-判断能否用 AppleScript 是**读 sdef 静态判断**，不靠"发一条试试"——后者会在休息弹出时触发授权弹窗。AX 遍历带节点数（2200）和深度（7）上限，避免 Chrome 这种大树把主线程卡住；只有文案完全匹配「暂停 / pause / 播放暂停」的按钮才会按，避免误点「暂停下载」。
-
-都没有通道的（比如 `afplay` 这种没有界面也没有 bundle 的命令行进程）会如实显示「无法自动暂停」，而不是给一个按了没反应的按钮。
-
-界面上不再是一个「暂停「XXX」」按钮，而是一张音频卡片：每个应用一行，左边是应用图标（放大当主视觉），右边是「标题 + 副标题」，末尾只有一个暂停/恢复按钮，顶部有「全部暂停」。超过 3 行自动压缩行高，最多列 5 行，其余提示用「全部暂停」一起处理。休息期间每 5 秒刷新一次，中途开新视频也会列出来。
-
-**标题 / 副标题从哪来**（`MediaMetadata`）：
-
-| 来源 | 标题 | 副标题 |
-| --- | --- | --- |
-| Music / Spotify / IINA / VLC | 歌名 | 歌手 · 专辑 |
-| Chrome / Safari 等浏览器 | 页签标题（网页 Media Session 的 title） | 站点名（artist） |
-| 拿不到元数据 | 应用名 | 正在播放 / 需「辅助功能」授权 |
-
-两级来源：**系统 Now Playing 槽位**（MediaRemote，无需授权；浏览器会把网页的 Media Session 发布到同一个槽位，所以能拿到「哪个页签在响」）和 **AppleScript**（`current track` / `current item`）。后者只在**已经授权「自动化」**时才读——用 `AEDeterminePermissionToAutomateTarget(askUserIfNeeded: false)` 静默探测，没授权就跳过，不会在休息遮罩弹出来的时候弹系统窗口。
-
-> ⚠️ **已知限制**：macOS 27 上 MediaRemote 的读取对非 Apple 签名的构建返回空——同一段代码用 Xcode 自带的 `swift-frontend` 跑能拿到完整字典（33 个键），换成自己编译的二进制就只剩空字典。换成固定自签名证书后行为还没复测，推测仍然不行：Apple 检查的应该是「有没有 Apple 签发的身份」，而不只是「cdhash 稳不稳定」。所以从源码构建的版本在浏览器上通常只能显示「网页音频」，音乐则依赖「自动化」授权后的 AppleScript。
-
-休息结束时只恢复**被我们暂停过、且现在还停在暂停状态**的那些：Now Playing 那个要求 PID 没变、`isPlaying` 仍为 false；AppleScript / AX 通道的要求该应用当前没有音频输出（说明用户没自己播起来）。
-
-降级链路：先探一次 `MRMediaRemoteGetNowPlayingInfo`，**字典非空**才认为读得到系统状态（否则「暂停后 isPlaying == false」是假阳性）；再 `MediaRemote pause` → 校验 `isPlaying == false` → 失败则模拟 `NX_KEYTYPE_PLAY` 媒体键（这条路需要辅助功能授权，所以只做兜底）。
-
-自动暂停是**默认开启**的（`autoPauseMedia` 默认 `true`，休息结束自动恢复默认也开）。注意它读的是本地已保存的偏好：老版本装过、之后手动关掉的话，升级后仍然是关着的，去设置里确认一眼。休息中途新开的视频只会出现在列表里，不会自动按下去——避免和用户刚点的播放打架。
-
-### 辅助功能授权为什么"点了没反应"
-
-系统那个「是否允许 Rest 控制这台电脑」的弹窗，对同一个应用**只会弹一次**。之前点过拒绝、或者签名变过被系统当成新应用，再调 `AXIsProcessTrustedWithOptions(prompt: true)` 就是彻底静默，什么都不会发生。
-
-所以「去授权」现在做三件事：先尝试弹系统窗，然后**无条件打开系统设置**的辅助功能页，再每秒轮询一次授权状态——你在列表里勾上 Rest，这边会自动变成「已授权」；旁边还留了个「重新检测」手动兜底。
-
-本地打包现在用固定证书签名（`tools/make-signing-cert.sh` 生成），TCC 按「bundle id + 证书指纹」记授权，重新编译、升级版本都不会再失效。装到 `/Applications/Rest.app` 后只需要在列表里勾一次，之后一直有效。没跑过那个脚本的机器仍然是 ad-hoc，哈希每次编译都变，旧授权会作废。
-
-### 2. 必应每日壁纸
-
-```
-https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN
-```
-
-返回 JSON 里的 `images[0].url`（`/th?id=OHR.xxx_UHD.jpg`），拼上 `uhd=1&uhdwidth=3840&uhdheight=2160` 拿 4K 原图，`images[0].copyright` 作为署名显示在右下角。
-
-**每次休息换一张新图**，而不是一天只换一次：用 `idx=0..7&n=8` 一次取回最近 8 天的图，用一份持久化的"上次用过的序号"轮换，保证相邻两次不重复。图片按图片 id 缓存在 `~/Library/Application Support/Rest/wallpapers/`，命中缓存直接读盘；断网时回退到已缓存的最近一张。休息开始前会**预取下一张**（`prepareNext`），所以点「立即休息」时是瞬间换图、没有等待空窗。
-
-### 3. 休息结束的三种策略
-
-配置项 `breakEndBehavior`：
-
-- `auto` —— 和 Stretchly 一样，倒计时归零直接进下一轮。
-- `manual` —— 停在结束界面，必须点「开始下一轮」。
-- `waitForInput` —— 倒计时归零后，遮罩内容淡出成全透明（窗口还在、还吃输入），用户看起来就像"已经可以操作了"；捕获到第一次键盘/鼠标/触控板动作后，关闭遮罩并开始下一轮。
-
-关键点是这个遮罩窗口：
-
-```swift
-window.level = .screenSaver                                  // 1000，压在全屏应用之上
-window.collectionBehavior = [.canJoinAllSpaces,              // 任何 Space 都出现
-                             .fullScreenAuxiliary,           // 能盖住别人的全屏
-                             .stationary, .ignoresCycle]
-window.backgroundColor = .clear
-window.isOpaque = false
-```
-
-`OverlayWindow` 重写了 `canBecomeKey`，所以窗口激活后能直接收到键盘事件；透明状态下 `alphaValue` 保持 1（置 0 有被 WindowServer 跳过命中测试的风险），只是 SwiftUI 内容画成 `Color.clear`。输入捕获用 `NSEvent.addLocalMonitorForEvents`（键盘/鼠标/滚轮/触控板手势），另加一层全局鼠标监听兜底——鼠标类全局事件不需要授权，键盘类需要，所以只兜鼠标。
-
-## 代码结构
-
-```
-Sources/Rest/
-  main.swift                  入口，设置 accessory 激活策略（纯菜单栏）
-  AppDelegate.swift           组装与首启逻辑
-  AppSettings.swift           全部设置项（UserDefaults）+ 空闲检测 + 音效
-  Scheduler.swift             工作/休息状态机（槽位计数决定小憩还是休息）
-  AudioActivityMonitor.swift  CoreAudio 进程对象枚举
-  MediaSource.swift           音频源模型 + 控制通道类型
-  PerAppMediaControl.swift    AppleScript / 辅助功能 / 媒体键三种单应用控制
-  MediaRemoteBridge.swift     MediaRemote 私有框架的 dlsym 封装
-  MediaController.swift       多音源快照 / 逐个暂停 / 恢复
-  WallpaperService.swift      必应壁纸下载与缓存
-  BreakViewModel.swift        休息界面状态
-  BreakView.swift             SwiftUI 休息界面
-  BreakWindowController.swift 跨屏遮罩窗口 + 输入捕获
-  BreakCoordinator.swift      把上面这些串起来
-  StatusBarController.swift   菜单栏图标与菜单
-  SettingsView.swift          设置窗口
-  DebugRender.swift           离屏渲染调试
-
-tools/
-  make-icon.swift             生成 AppIcon.icns
-  make-signing-cert.sh        生成本地自签名证书 + 签名钥匙串
-  make-dmg.sh                 把 Rest.app 打成 DMG
-```
-
-计时用「目标时间戳」而不是自增计数器，睡眠唤醒后不会漂移。空闲超过 2 分钟会跳过这次休息（可在设置里关掉）。
-
-界面上的倒计时不是自己算的：`Scheduler` 每 0.25s 通过 `onBreakTick(remaining, total)` 把剩余时间推给 `BreakCoordinator`，后者写进 `BreakViewModel.remaining`。这样状态机和界面只有一个数据源，不会出现"环在转、数字不动"或反过来。
-
-## 已知边界
-
-- `MediaRemote.framework` 是私有 API，随系统版本有变化风险；失效时会自动退化为媒体键模拟。
-- `IsRunningOutput == 1` 只代表"输出流开着"。播放器暂停后常常仍保持这条流（Music、Chrome 都是），所以列表里可能出现在"其实没在播"的应用。这是公开 API 能给到的最准的信息，界面上按「占用音频输出」呈现，点暂停对它也是安全的空操作。
-- 辅助功能授权绑定代码签名。现在用固定自签名证书（`tools/make-signing-cert.sh`），编译多少次都还是同一个身份，不用反复授权；但**换机器、删了 `rest-signing.keychain-db`** 就等于换了身份，得重新勾一次。
-- 第三方应用能否被 AX 控制取决于它自己：原生播放器一般能找到「暂停」按钮，浏览器里的网页播放器要 Chrome 把无障碍树暴露出来才可能命中，命中不了会如实显示「无法自动暂停」。
-- 遮罩捕获到输入时，那一下点击/按键会被吞掉（本来就是"我回来了"的确认动作）。
-- 主要针对单用户本机使用，未做沙盒与公证。
+- macOS 实现细节（媒体控制三级降级、壁纸缓存、遮罩窗口行为）：[macos/README.md](macos/README.md)
+- Windows 实现细节（API 映射、调试参数、已知差异、真机验证记录）：[windows/README.md](windows/README.md)

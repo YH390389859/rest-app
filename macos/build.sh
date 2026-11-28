@@ -22,6 +22,12 @@ if [ "${UNIVERSAL:-0}" = "1" ]; then
   ARCH_FLAGS=(--arch arm64 --arch x86_64)
 fi
 
+# 版本号只有一个来源：仓库根的 VERSION 文件。CI 打 tag 时用 tag 名覆盖（VERSION=v1.2.0）。
+# 这里兜底读一次，避免本地构建出来的包版本号永远是 Info.plist 里那个旧值。
+if [ -z "${VERSION:-}" ] && [ -f ../VERSION ]; then
+  VERSION="$(tr -d '[:space:]' < ../VERSION)"
+fi
+
 echo "==> swift build -c $CONFIG"
 swift build -c "$CONFIG" --product Rest --disable-sandbox ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
 
