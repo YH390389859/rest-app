@@ -1,5 +1,12 @@
 name: build
 
+# 一条流水线同时出 macOS 和 Windows 的包：
+#   推 main / 开 PR / 手动触发  → 两个平台都构建，产物作为 artifact 留 30 天
+#   推 v* tag                  → 两边都成功后，把 4 个包挂到同一个 Release
+#
+# 以前是两个独立工作流（build.yml + windows.yml），tag 打下去时各自发各自的 Release，
+# 谁先跑完谁的包先上，跑挂一个就变成"半个 Release"。现在合成一个，Release 依赖两边都过。
+
 on:
   push:
     branches: [main]
@@ -7,7 +14,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-# tag 触发时要往 Releases 里传包
 permissions:
   contents: write
 
@@ -16,25 +22,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  # 版本号只有一个来源：仓库根的 VERSION。tag 必须和它一致，
+  # 否则会出现「安装器里写 1.1.0、Release 叫 v1.2.0」这种对不上的情况。
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: v
+        run: |
+          set -euo pipefail
+          FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+            if [[ "$TAG_VERSION" != "$FILE_VERSION" ]]; then
+              echo "::error::tag v$TAG_VERSION 与 VERSION 文件里的 $FILE_VERSION 不一致，先把 VERSION 改对"
+              exit 1
+            fi
+          fi
+          echo "version=$FILE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "本次版本号：$FILE_VERSION"
+
+  macos:
+    needs: version
     # macos-latest 现在是 macOS 26 arm64，官方明确标注 arm64 容量紧张：
     # 实测连排队 15 分钟会被直接 cancel。改用 Intel 镜像，通用二进制照样交叉编译出 arm64。
     runs-on: macos-26-intel
+    defaults:
+      run:
+        working-directory: macos
     env:
       # 有证书就用固定身份签（TCC 授权跨版本保留），没有就退回 ad-hoc
       SIGNING_P12: ${{ secrets.SIGNING_P12 }}
       SIGNING_P12_PASS: ${{ secrets.SIGNING_P12_PASS }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
-
-      - name: 解析版本号
-        id: meta
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: 导入签名证书
         if: env.SIGNING_P12 != ''
@@ -66,14 +90,14 @@ jobs:
       - name: 缓存 SwiftPM 构建产物
         uses: actions/cache@v6
         with:
-          path: .build
-          key: ${{ runner.os }}-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          # actions/cache 的 path 以仓库根为基准，不受 working-directory 影响
+          path: macos/.build
+          key: ${{ runner.os }}-spm-${{ hashFiles('macos/Package.swift', 'macos/Package.resolved') }}
           restore-keys: ${{ runner.os }}-spm-
 
       - name: 构建（arm64 + x86_64）
         env:
           UNIVERSAL: "1"
-          VERSION: ${{ steps.meta.outputs.version }}
         run: ./build.sh release
 
       - name: 校验产物
@@ -94,7 +118,13 @@ jobs:
 
           codesign --verify --strict build/Rest.app
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' build/Rest.app/Contents/Info.plist
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/Rest.app/Contents/Info.plist
+
+          # 版本号必须真的写进去了（VERSION 文件 → Info.plist）
+          GOT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/Rest.app/Contents/Info.plist)"
+          if [[ "$GOT" != "$VERSION" ]]; then
+            echo "!! Info.plist 版本号 $GOT 与期望 $VERSION 不一致"; exit 1
+          fi
+          echo "版本号检查通过: $GOT"
 
           # 配了证书就必须真的用上了：一旦悄悄退回 ad-hoc，用户的授权又会每次失效
           SIGN_INFO="$(codesign -dv --verbose=2 build/Rest.app 2>&1)"
@@ -138,13 +168,123 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v7
         with:
-          name: Rest-app
-          path: dist/*
+          name: Rest-macos
+          path: macos/dist/*
           if-no-files-found: error
           retention-days: 30
 
+  windows:
+    needs: version
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+    env:
+      # 配了证书就签 Rest.exe 和 setup.exe；两个 secret 都为空时构建脚本直接跳过
+      WINDOWS_SIGN_PFX_BASE64: ${{ secrets.WINDOWS_SIGN_PFX_BASE64 }}
+      WINDOWS_SIGN_PFX_PASS: ${{ secrets.WINDOWS_SIGN_PFX_PASS }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: 安装 Inno Setup
+        shell: pwsh
+        run: |
+          # windows-latest 镜像不保证带 ISCC，自己装一个最稳
+          if (Get-Command ISCC.exe -ErrorAction SilentlyContinue) { return }
+          choco install innosetup -y --no-progress
+          $iscc = @(
+            "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "Inno Setup 安装失败" }
+          Write-Host "ISCC: $iscc"
+
+      - name: 还原
+        run: dotnet restore Rest.sln
+
+      # 两个平台的节奏模型必须一致，这条红了就别往下打了
+      - name: 核心逻辑测试
+        run: dotnet test tests/Rest.Core.Tests/Rest.Core.Tests.csproj -c Release --nologo
+
+      - name: 构建（便携包 + 安装器）
+        shell: pwsh
+        run: .\build.ps1 -Configuration Release -Zip -Installer -Version ${{ needs.version.outputs.version }}
+
+      - name: 产物断言
+        shell: pwsh
+        run: |
+          $exe = 'dist/win-x64/Rest.exe'
+          if (-not (Test-Path $exe)) { throw "缺少 $exe" }
+          if ((Get-Item $exe).Length -lt 100KB) { throw "Rest.exe 太小，可能是空壳" }
+          $ver = (Get-Item $exe).VersionInfo.ProductVersion
+          Write-Host "Rest.exe 版本资源: $ver"
+          if ($ver -notlike "${{ needs.version.outputs.version }}*") { throw "版本资源 $ver 与期望不符" }
+
+          $setup = Get-ChildItem dist/Rest-*-setup.exe -ErrorAction SilentlyContinue
+          if (-not $setup) { throw "没有生成安装器" }
+          Write-Host "安装器: $($setup.Name) $([math]::Round($setup.Length/1MB,1)) MB"
+
+      # 安装器不能只"编译通过"就算完：静默装一遍、跑一次、再卸掉。
+      # 这一步能抓到 [Files] 路径写错、安装后缺文件、卸载残留这类问题。
+      - name: 安装器冒烟测试
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem dist/Rest-*-setup.exe | Select-Object -First 1).FullName
+          $dir = Join-Path $env:TEMP 'rest-install-smoke'
+          if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+
+          $p = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList `
+               '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOICONS', "/DIR=$dir"
+          Write-Host "安装退出码: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "静默安装失败：$($p.ExitCode)" }
+
+          foreach ($f in 'Rest.exe', 'Rest.Core.dll', 'unins000.exe') {
+            if (-not (Test-Path (Join-Path $dir $f))) { throw "安装目录缺少 $f" }
+          }
+          Write-Host "安装文件数: $((Get-ChildItem $dir -Recurse -File).Count)"
+
+          $t = Start-Process -FilePath (Join-Path $dir 'Rest.exe') -ArgumentList '--self-test' `
+                             -Wait -PassThru -NoNewWindow
+          if ($t.ExitCode -ne 0) { throw "已安装副本自检失败：$($t.ExitCode)" }
+          Write-Host "已安装副本自检通过"
+
+          $u = Start-Process -FilePath (Join-Path $dir 'unins000.exe') -Wait -PassThru `
+                             -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+          if ($u.ExitCode -ne 0) { throw "卸载失败：$($u.ExitCode)" }
+          Start-Sleep -Seconds 2
+          if (Test-Path (Join-Path $dir 'Rest.exe')) { throw "卸载后 Rest.exe 还在" }
+          Write-Host "卸载干净"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Rest-windows
+          path: |
+            windows/dist/Rest-*-win-x64-portable.zip
+            windows/dist/Rest-*-win-x64-setup.exe
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    # 只有 tag 才发 Release，而且必须两个平台都成功——避免"半个 Release"
+    needs: [version, macos, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: 汇总两个平台的产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 列出待发布文件
+        run: ls -lh dist
+
       - name: 发布 Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
           files: dist/*
