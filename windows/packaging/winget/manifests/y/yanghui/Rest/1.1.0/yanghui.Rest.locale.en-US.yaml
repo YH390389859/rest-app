@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: yanghui.Rest
+PackageVersion: 1.1.0
+PackageLocale: en-US
+Publisher: yanghui
+PublisherUrl: https://github.com/YH390389859
+PublisherSupportUrl: https://github.com/YH390389859/rest-app/issues
+Author: Yang Hui
+PackageName: Rest
+PackageUrl: https://github.com/YH390389859/rest-app
+License: MIT
+LicenseUrl: https://github.com/YH390389859/rest-app/blob/main/LICENSE
+Copyright: Copyright (c) 2026 YH390389859 (Yang Hui)
+ShortDescription: Break reminder that pauses your video, dims every display, and resumes playback afterwards.
+Description: >-
+  Rest is a desktop break reminder for Windows and macOS. At a configurable interval it pauses
+  the media currently playing, covers every display with a translucent countdown overlay showing
+  the remaining break time, and resumes playback when the break ends. It uses Bing's daily
+  wallpaper as the break backdrop and supports per-monitor DPI on mixed-scaling multi-monitor
+  setups. Short and long break cycles can be configured independently. The application collects
+  no user data; the only outbound request is downloading the wallpaper image.
+Moniker: rest
+Tags:
+  - break
+  - reminder
+  - productivity
+  - pomodoro
+  - health
+  - eye-care
+ReleaseNotesUrl: https://github.com/YH390389859/rest-app/releases/tag/v1.1.0
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
