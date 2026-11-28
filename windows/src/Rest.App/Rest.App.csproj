@@ -13,6 +13,8 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>Rest</AssemblyName>
     <RootNamespace>Rest.App</RootNamespace>
+    <!-- 和 Resources/Info.plist 的 CFBundleShortVersionString 保持一致，发版时一起改 -->
+    <Version>1.0.5</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>../Resources/Rest.ico</ApplicationIcon>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
